@@ -1,10 +1,11 @@
+import argparse
+import os
 import mimetypes
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 
@@ -16,10 +17,23 @@ from app.services.bootstrap import seed_defaults  # noqa: E402
 from app.services.storage import storage_service  # noqa: E402
 
 
-FRONTEND_PUBLIC_DIR = ROOT / "frontend" / "public"
-THUMBNAILS_DIR = FRONTEND_PUBLIC_DIR / "Images" / "thumbnails"
-PANORAMAS_DIR = FRONTEND_PUBLIC_DIR / "Images" / "panoramas"
-POINTCLOUD_DIR = FRONTEND_PUBLIC_DIR / "PCD"
+DEFAULT_FRONTEND_PUBLIC_DIR = Path("/legacy-frontend-public")
+
+
+def resolve_frontend_public_dir(frontend_public_dir: str | None) -> Path:
+    if frontend_public_dir:
+        return Path(frontend_public_dir).expanduser().resolve()
+
+    env_path = os.getenv("LEGACY_FRONTEND_PUBLIC_DIR")
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+
+    # Convenient fallback when the three repos are checked out side-by-side.
+    sibling_repo_path = BACKEND_ROOT.parent / "frontend" / "public"
+    if sibling_repo_path.exists():
+        return sibling_repo_path.resolve()
+
+    return DEFAULT_FRONTEND_PUBLIC_DIR
 
 
 def room_slug_from_name(file_name: str) -> str | None:
@@ -42,6 +56,19 @@ def upload_file(path: Path, bucket_name: str, object_name: str) -> tuple[str | N
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--frontend-public-dir",
+        dest="frontend_public_dir",
+        help="Path to the frontend repo public directory",
+    )
+    args = parser.parse_args()
+
+    frontend_public_dir = resolve_frontend_public_dir(args.frontend_public_dir)
+    thumbnails_dir = frontend_public_dir / "Images" / "thumbnails"
+    panoramas_dir = frontend_public_dir / "Images" / "panoramas"
+    pointcloud_dir = frontend_public_dir / "PCD"
+
     Base.metadata.create_all(bind=engine)
     storage_service.ensure_buckets()
 
@@ -53,8 +80,8 @@ def main() -> None:
         db.execute(delete(FileAsset))
         db.commit()
 
-        if THUMBNAILS_DIR.exists():
-            for thumb_path in THUMBNAILS_DIR.rglob("*"):
+        if thumbnails_dir.exists():
+            for thumb_path in thumbnails_dir.rglob("*"):
                 if not thumb_path.is_file():
                     continue
 
@@ -67,7 +94,7 @@ def main() -> None:
                 except ValueError:
                     continue
 
-                panorama_path = PANORAMAS_DIR / thumb_path.parent.name / thumb_path.name
+                panorama_path = panoramas_dir / thumb_path.parent.name / thumb_path.name
                 if not panorama_path.exists():
                     continue
 
@@ -103,8 +130,8 @@ def main() -> None:
                     )
                 )
 
-        if POINTCLOUD_DIR.exists():
-            for pointcloud_path in POINTCLOUD_DIR.rglob("*"):
+        if pointcloud_dir.exists():
+            for pointcloud_path in pointcloud_dir.rglob("*"):
                 if not pointcloud_path.is_file():
                     continue
 
@@ -141,7 +168,7 @@ def main() -> None:
                 )
 
         db.commit()
-        print("Legacy asset migration completed.")
+        print(f"Legacy asset migration completed from: {frontend_public_dir}")
 
 
 if __name__ == "__main__":
