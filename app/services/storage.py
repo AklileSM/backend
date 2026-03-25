@@ -70,5 +70,14 @@ class StorageService:
         except Exception:
             return False
 
+    def remove_object_best_effort(self, bucket_name: str, object_name: str) -> None:
+        try:
+            self.client.remove_object(bucket_name, object_name)
+        except S3Error as e:
+            code = getattr(e, "code", "") or ""
+            if code in ("NoSuchKey", "ResourceNotFound"):
+                return
+            raise
+
 
 storage_service = StorageService()

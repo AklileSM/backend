@@ -31,3 +31,9 @@ def get_current_user(
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account disabled")
     return user
+
+
+def require_user_can_upload(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.role == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot upload files")
+    return current_user

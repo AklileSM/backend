@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import require_user_can_upload
 from app.config import get_settings
 from app.database import get_db
 from app.models import FileAsset, Room, User
@@ -33,7 +33,7 @@ async def upload_single(
     media_type: str = Form(...),
     capture_date: date = Form(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_user_can_upload),
 ) -> UploadResponse:
     if media_type not in _ALLOWED_MEDIA:
         raise HTTPException(status_code=400, detail="Invalid media_type")

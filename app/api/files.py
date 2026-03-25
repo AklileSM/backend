@@ -5,8 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.api.deps import get_current_user
 from app.database import get_db
-from app.models import FileAsset, Room
+from app.models import FileAsset, Room, User
 from app.schemas import (
     DateMediaCounts,
     ExplorerByDateResponse,
@@ -33,6 +34,9 @@ def _serialize_asset(asset: FileAsset) -> MediaFileResponse:
     src = full_src
     if asset.thumbnail_bucket_name and asset.thumbnail_object_name:
         src = storage_service.get_presigned_url(asset.thumbnail_bucket_name, asset.thumbnail_object_name)
+    meta = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    uploaded_by = meta.get("uploaded_by_user_id")
+    uploaded_by_str = str(uploaded_by) if uploaded_by is not None else None
     return MediaFileResponse(
         id=asset.id,
         src=src,
@@ -40,7 +44,12 @@ def _serialize_asset(asset: FileAsset) -> MediaFileResponse:
         file_name=asset.display_name,
         full_src=full_src,
         capture_date=asset.capture_date,
+        uploaded_by_user_id=uploaded_by_str,
     )
+
+
+def _can_delete_file(user: User, _asset: FileAsset) -> bool:
+    return user.role in ("admin", "manager")
 
 
 def _empty_group() -> RoomMediaGroup:
@@ -105,6 +114,26 @@ def explorer_by_room(room_slug: str, db: Session = Depends(get_db)) -> ExplorerB
         getattr(dates_map[day], _media_key(asset.media_type)).append(_serialize_asset(asset))
 
     return ExplorerByRoomResponse(room=room.slug, room_name=room.name, dates=dict(dates_map))
+
+
+@router.delete("/{file_id}", status_code=204)
+def delete_file_asset(
+    file_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    asset = db.scalar(select(FileAsset).where(FileAsset.id == file_id))
+    if asset is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    if not _can_delete_file(current_user, asset):
+        raise HTTPException(status_code=403, detail="Not allowed to delete this file")
+
+    if asset.thumbnail_bucket_name and asset.thumbnail_object_name:
+        storage_service.remove_object_best_effort(asset.thumbnail_bucket_name, asset.thumbnail_object_name)
+    storage_service.remove_object_best_effort(asset.bucket_name, asset.object_name)
+
+    db.delete(asset)
+    db.commit()
 
 
 @router.get("/{file_id}/url")

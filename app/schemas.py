@@ -11,6 +11,7 @@ class MediaFileResponse(BaseModel):
     file_name: str
     full_src: str | None = None
     capture_date: date
+    uploaded_by_user_id: str | None = None
 
 
 class RoomMediaGroup(BaseModel):
