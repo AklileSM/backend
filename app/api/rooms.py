@@ -9,10 +9,16 @@ from app.schemas import RoomResponse
 router = APIRouter()
 
 
-@router.get("/", response_model=list[RoomResponse])
-def list_rooms(db: Session = Depends(get_db)) -> list[RoomResponse]:
+def _list_rooms(db: Session) -> list[RoomResponse]:
     rooms = db.scalars(select(Room).order_by(Room.sort_order.asc(), Room.name.asc())).all()
     return [RoomResponse(id=r.id, name=r.name, slug=r.slug, project_id=r.project_id) for r in rooms]
+
+
+# Both paths: some proxies/clients call /api/rooms without a trailing slash.
+@router.get("", response_model=list[RoomResponse])
+@router.get("/", response_model=list[RoomResponse])
+def list_rooms(db: Session = Depends(get_db)) -> list[RoomResponse]:
+    return _list_rooms(db)
 
 
 @router.get("/{room_slug}", response_model=RoomResponse)
