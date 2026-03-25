@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import computed_field
+from pydantic import computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,7 +33,15 @@ class Settings(BaseSettings):
 
     hyperbolic_api_key: str = ""
     hyperbolic_api_url: str = "https://api.hyperbolic.xyz/v1/chat/completions"
+
     hyperbolic_model: str = "Qwen/Qwen2.5-VL-72B-Instruct"
+
+    @field_validator("hyperbolic_api_key", mode="before")
+    @classmethod
+    def strip_hyperbolic_api_key(cls, v: object) -> object:
+        if isinstance(v, str):
+            return v.strip()
+        return v
 
     frontend_url: str = "http://localhost:5173"
     cors_extra_origins: str = ""
