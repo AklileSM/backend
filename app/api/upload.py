@@ -7,14 +7,17 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_user
 from app.config import get_settings
 from app.database import get_db
-from app.models import FileAsset, Room
+from app.models import FileAsset, Room, User
 from app.schemas import UploadResponse
 from app.services.storage import storage_service
 
 router = APIRouter()
 settings = get_settings()
+
+_ALLOWED_MEDIA = frozenset({"image", "video", "pointcloud"})
 
 
 def _bucket_for_media_type(media_type: str) -> str:
@@ -30,7 +33,11 @@ async def upload_single(
     media_type: str = Form(...),
     capture_date: date = Form(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> UploadResponse:
+    if media_type not in _ALLOWED_MEDIA:
+        raise HTTPException(status_code=400, detail="Invalid media_type")
+
     room = db.scalar(select(Room).where(Room.slug == room_slug))
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
@@ -76,7 +83,10 @@ async def upload_single(
         thumbnail_object_name=thumbnail_object_name,
         content_type=content_type,
         file_size=len(raw),
-        metadata_json={},
+        metadata_json={
+            "uploaded_by_user_id": current_user.id,
+            "uploaded_by_username": current_user.username,
+        },
     )
     db.add(asset)
     db.commit()
