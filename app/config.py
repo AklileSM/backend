@@ -36,11 +36,16 @@ class Settings(BaseSettings):
     hyperbolic_model: str = "Qwen/Qwen2.5-VL-72B-Instruct"
 
     frontend_url: str = "http://localhost:5173"
+    cors_extra_origins: str = ""
     presigned_url_expiry_seconds: int = 604800
     max_upload_size_bytes: int = 524288000
     thumbnail_width: int = 400
     thumbnail_height: int = 300
     thumbnail_quality: int = 82
+
+    jwt_secret: str = "dev-only-change-me"  # override with JWT_SECRET in production
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 10080
 
     @computed_field  # type: ignore[prop-decorator]
     @property

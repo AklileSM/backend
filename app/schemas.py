@@ -104,3 +104,29 @@ class AnnotationResponse(BaseModel):
     annotation_type: str
     data: dict[str, Any]
     created_at: datetime
+
+
+class UserRegisterRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9._-]+$")
+    password: str = Field(min_length=8, max_length=128)
+    email: str | None = Field(default=None, max_length=255)
+
+
+class UserLoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class UserPublic(BaseModel):
+    id: str
+    username: str
+    email: str | None
+    role: str
+
+    model_config = {"from_attributes": True}
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserPublic
