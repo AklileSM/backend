@@ -52,6 +52,14 @@ class StorageService:
             expires=timedelta(seconds=settings.presigned_url_expiry_seconds),
         )
 
+    def get_object_bytes(self, bucket_name: str, object_name: str) -> bytes:
+        response = self.client.get_object(bucket_name, object_name)
+        try:
+            return response.read()
+        finally:
+            response.close()
+            response.release_conn()
+
     def generate_thumbnail(self, raw_bytes: bytes) -> bytes:
         image = Image.open(BytesIO(raw_bytes))
         if image.mode not in ("RGB", "L"):
