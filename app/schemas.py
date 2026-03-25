@@ -30,6 +30,16 @@ class ExplorerByRoomResponse(BaseModel):
     dates: dict[str, RoomMediaGroup]
 
 
+class DateMediaCounts(BaseModel):
+    images: int
+    videos: int
+    pointclouds: int
+
+
+class ExplorerDatesSummaryResponse(BaseModel):
+    dates: dict[str, DateMediaCounts]
+
+
 class ProjectResponse(BaseModel):
     id: str
     name: str

@@ -2,12 +2,19 @@ from collections import defaultdict
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.models import FileAsset, Room
-from app.schemas import ExplorerByDateResponse, ExplorerByRoomResponse, MediaFileResponse, RoomMediaGroup
+from app.schemas import (
+    DateMediaCounts,
+    ExplorerByDateResponse,
+    ExplorerByRoomResponse,
+    ExplorerDatesSummaryResponse,
+    MediaFileResponse,
+    RoomMediaGroup,
+)
 from app.services.storage import storage_service
 
 router = APIRouter()
@@ -38,6 +45,26 @@ def _serialize_asset(asset: FileAsset) -> MediaFileResponse:
 
 def _empty_group() -> RoomMediaGroup:
     return RoomMediaGroup(images=[], videos=[], pointclouds=[])
+
+
+@router.get("/explorer/dates", response_model=ExplorerDatesSummaryResponse)
+def explorer_dates_summary(db: Session = Depends(get_db)) -> ExplorerDatesSummaryResponse:
+    image_sum = func.sum(case((FileAsset.media_type == "image", 1), else_=0))
+    video_sum = func.sum(case((FileAsset.media_type == "video", 1), else_=0))
+    pointcloud_sum = func.sum(case((FileAsset.media_type == "pointcloud", 1), else_=0))
+    stmt = (
+        select(FileAsset.capture_date, image_sum, video_sum, pointcloud_sum)
+        .group_by(FileAsset.capture_date)
+        .order_by(FileAsset.capture_date.asc())
+    )
+    dates: dict[str, DateMediaCounts] = {}
+    for capture_date, images, videos, pointclouds in db.execute(stmt):
+        dates[capture_date.isoformat()] = DateMediaCounts(
+            images=int(images or 0),
+            videos=int(videos or 0),
+            pointclouds=int(pointclouds or 0),
+        )
+    return ExplorerDatesSummaryResponse(dates=dates)
 
 
 @router.get("/explorer/date/{capture_date}", response_model=ExplorerByDateResponse)
