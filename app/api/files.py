@@ -2,7 +2,8 @@ from collections import defaultdict
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import String, case, cast, func, select
+from sqlalchemy import case, cast, func, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user
@@ -84,10 +85,12 @@ def list_my_uploads(
     if current_user.role not in ("admin", "manager"):
         raise HTTPException(status_code=403, detail="Upload history is only available for admin and manager accounts")
 
+    # Compare as text: cast(json)->>'uploaded_by_user_id' must match user id (plain cast(String) on JSON
+    # values can include JSON quoting and fail to match).
     stmt = (
         select(FileAsset, Room)
         .join(Room, FileAsset.room_id == Room.id)
-        .where(cast(FileAsset.metadata_json["uploaded_by_user_id"], String) == current_user.id)
+        .where(cast(FileAsset.metadata_json, JSONB)["uploaded_by_user_id"].astext == current_user.id)
         .order_by(FileAsset.created_at.desc())
     )
     rows = db.execute(stmt).all()
