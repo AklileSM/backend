@@ -78,7 +78,6 @@ class ReportCreateRequest(BaseModel):
     manual_observations: str | None = None
     flags: list[str] = Field(default_factory=list)
     screenshots: list[str] = Field(default_factory=list)
-    created_by: str | None = None
 
 
 class ReportResponse(BaseModel):
