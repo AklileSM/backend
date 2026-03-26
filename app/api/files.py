@@ -2,7 +2,7 @@ from collections import defaultdict
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import case, func, select
+from sqlalchemy import String, case, cast, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user
@@ -14,6 +14,7 @@ from app.schemas import (
     ExplorerByRoomResponse,
     ExplorerDatesSummaryResponse,
     MediaFileResponse,
+    MyUploadItemResponse,
     RoomMediaGroup,
 )
 from app.services.storage import storage_service
@@ -54,6 +55,43 @@ def _can_delete_file(user: User, _asset: FileAsset) -> bool:
 
 def _empty_group() -> RoomMediaGroup:
     return RoomMediaGroup(images=[], videos=[], pointclouds=[])
+
+
+def _serialize_my_upload(asset: FileAsset, room: Room) -> MyUploadItemResponse:
+    full_src = storage_service.get_presigned_url(asset.bucket_name, asset.object_name)
+    src = full_src
+    if asset.thumbnail_bucket_name and asset.thumbnail_object_name:
+        src = storage_service.get_presigned_url(asset.thumbnail_bucket_name, asset.thumbnail_object_name)
+    return MyUploadItemResponse(
+        id=asset.id,
+        room_slug=room.slug,
+        room_name=room.name,
+        media_type=asset.media_type,
+        file_name=asset.display_name,
+        capture_date=asset.capture_date,
+        created_at=asset.created_at,
+        src=src,
+        full_src=full_src,
+    )
+
+
+@router.get("/my-uploads", response_model=list[MyUploadItemResponse])
+def list_my_uploads(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[MyUploadItemResponse]:
+    """Assets whose upload metadata records this user (admin/manager uploads)."""
+    if current_user.role not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="Upload history is only available for admin and manager accounts")
+
+    stmt = (
+        select(FileAsset, Room)
+        .join(Room, FileAsset.room_id == Room.id)
+        .where(cast(FileAsset.metadata_json["uploaded_by_user_id"], String) == current_user.id)
+        .order_by(FileAsset.created_at.desc())
+    )
+    rows = db.execute(stmt).all()
+    return [_serialize_my_upload(asset, room) for asset, room in rows]
 
 
 @router.get("/explorer/dates", response_model=ExplorerDatesSummaryResponse)

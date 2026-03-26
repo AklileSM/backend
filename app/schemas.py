@@ -14,6 +14,20 @@ class MediaFileResponse(BaseModel):
     uploaded_by_user_id: str | None = None
 
 
+class MyUploadItemResponse(BaseModel):
+    """File asset uploaded by the current user (see metadata_json.uploaded_by_user_id)."""
+
+    id: str
+    room_slug: str
+    room_name: str
+    media_type: str
+    file_name: str
+    capture_date: date
+    created_at: datetime
+    src: str
+    full_src: str | None = None
+
+
 class RoomMediaGroup(BaseModel):
     images: list[MediaFileResponse] = Field(default_factory=list)
     videos: list[MediaFileResponse] = Field(default_factory=list)
