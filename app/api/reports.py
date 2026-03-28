@@ -85,6 +85,25 @@ def create_report(
     return _report_to_response(report)
 
 
+@router.delete("/{report_id}", status_code=204)
+def delete_report(
+    report_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    report = db.scalar(select(Report).where(Report.id == report_id))
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if report.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed to delete this report")
+
+    if report.pdf_bucket_name and report.pdf_object_name:
+        storage_service.remove_object_best_effort(report.pdf_bucket_name, report.pdf_object_name)
+
+    db.delete(report)
+    db.commit()
+
+
 @router.post("/with-pdf", response_model=ReportResponse)
 async def create_report_with_pdf(
     file: UploadFile = File(...),
@@ -139,3 +158,22 @@ async def create_report_with_pdf(
     db.refresh(report)
 
     return _report_to_response(report)
+
+
+@router.delete("/{report_id}", status_code=204)
+def delete_report(
+    report_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    report = db.scalar(select(Report).where(Report.id == report_id))
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if report.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed to delete this report")
+
+    if report.pdf_bucket_name and report.pdf_object_name:
+        storage_service.remove_object_best_effort(report.pdf_bucket_name, report.pdf_object_name)
+
+    db.delete(report)
+    db.commit()
