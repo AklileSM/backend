@@ -17,12 +17,14 @@ from app.services.storage import storage_service
 router = APIRouter()
 settings = get_settings()
 
-_ALLOWED_MEDIA = frozenset({"image", "video", "pointcloud"})
+_ALLOWED_MEDIA = frozenset({"image", "video", "pointcloud", "pdf"})
 
 
 def _bucket_for_media_type(media_type: str) -> str:
     if media_type == "pointcloud":
         return settings.minio_bucket_pointclouds
+    if media_type == "pdf":
+        return settings.minio_bucket_pdfs
     return settings.minio_bucket_images
 
 
@@ -46,10 +48,18 @@ async def upload_single(
     if len(raw) > settings.max_upload_size_bytes:
         raise HTTPException(status_code=413, detail="File too large")
 
+    if media_type == "pdf":
+        fn = (file.filename or "").lower()
+        ct = (file.content_type or "").lower()
+        if "pdf" not in ct and not fn.endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Expected a PDF file")
+
     extension = os.path.splitext(file.filename or "")[1]
     object_name = f"{room.slug}/{capture_date.isoformat()}/{uuid.uuid4().hex}{extension}"
     bucket_name = _bucket_for_media_type(media_type)
     content_type = file.content_type or mimetypes.guess_type(file.filename or "")[0] or "application/octet-stream"
+    if media_type == "pdf" and "pdf" not in content_type.lower():
+        content_type = "application/pdf"
 
     storage_service.upload_bytes(
         bucket_name=bucket_name,

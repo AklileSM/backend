@@ -24,6 +24,7 @@ class StorageService:
             settings.minio_bucket_images,
             settings.minio_bucket_thumbnails,
             settings.minio_bucket_pointclouds,
+            settings.minio_bucket_pdfs,
             settings.minio_bucket_reports,
         ):
             if not self.client.bucket_exists(bucket):

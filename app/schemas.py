@@ -32,6 +32,7 @@ class RoomMediaGroup(BaseModel):
     images: list[MediaFileResponse] = Field(default_factory=list)
     videos: list[MediaFileResponse] = Field(default_factory=list)
     pointclouds: list[MediaFileResponse] = Field(default_factory=list)
+    pdfs: list[MediaFileResponse] = Field(default_factory=list)
 
 
 class ExplorerByDateResponse(BaseModel):
@@ -49,6 +50,7 @@ class DateMediaCounts(BaseModel):
     images: int
     videos: int
     pointclouds: int
+    pdfs: int
 
 
 class ExplorerDatesSummaryResponse(BaseModel):

@@ -28,6 +28,8 @@ def _media_key(media_type: str) -> str:
         return "pointclouds"
     if media_type == "video":
         return "videos"
+    if media_type == "pdf":
+        return "pdfs"
     return "images"
 
 
@@ -55,7 +57,7 @@ def _can_delete_file(user: User, _asset: FileAsset) -> bool:
 
 
 def _empty_group() -> RoomMediaGroup:
-    return RoomMediaGroup(images=[], videos=[], pointclouds=[])
+    return RoomMediaGroup(images=[], videos=[], pointclouds=[], pdfs=[])
 
 
 def _serialize_my_upload(asset: FileAsset, room: Room) -> MyUploadItemResponse:
@@ -102,17 +104,19 @@ def explorer_dates_summary(db: Session = Depends(get_db)) -> ExplorerDatesSummar
     image_sum = func.sum(case((FileAsset.media_type == "image", 1), else_=0))
     video_sum = func.sum(case((FileAsset.media_type == "video", 1), else_=0))
     pointcloud_sum = func.sum(case((FileAsset.media_type == "pointcloud", 1), else_=0))
+    pdf_sum = func.sum(case((FileAsset.media_type == "pdf", 1), else_=0))
     stmt = (
-        select(FileAsset.capture_date, image_sum, video_sum, pointcloud_sum)
+        select(FileAsset.capture_date, image_sum, video_sum, pointcloud_sum, pdf_sum)
         .group_by(FileAsset.capture_date)
         .order_by(FileAsset.capture_date.asc())
     )
     dates: dict[str, DateMediaCounts] = {}
-    for capture_date, images, videos, pointclouds in db.execute(stmt):
+    for capture_date, images, videos, pointclouds, pdfs in db.execute(stmt):
         dates[capture_date.isoformat()] = DateMediaCounts(
             images=int(images or 0),
             videos=int(videos or 0),
             pointclouds=int(pointclouds or 0),
+            pdfs=int(pdfs or 0),
         )
     return ExplorerDatesSummaryResponse(dates=dates)
 

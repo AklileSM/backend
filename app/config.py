@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     minio_bucket_images: str = "construction-images"
     minio_bucket_thumbnails: str = "construction-thumbnails"
     minio_bucket_pointclouds: str = "construction-pointclouds"
+    minio_bucket_pdfs: str = "construction-pdfs"
     minio_bucket_reports: str = "construction-reports"
 
     hyperbolic_api_key: str = ""
