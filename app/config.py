@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     hyperbolic_api_key: str = ""
     hyperbolic_api_url: str = "https://api.hyperbolic.xyz/v1/chat/completions"
 
-    hyperbolic_model: str = "Qwen/Qwen2.5-VL-72B-Instruct"
+    hyperbolic_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
 
     @field_validator("hyperbolic_api_key", mode="before")
     @classmethod
