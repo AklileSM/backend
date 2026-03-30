@@ -27,12 +27,16 @@ def _extract_final_sections(text: str) -> str:
     if not t:
         return t
 
+    # Be permissive about formatting:
+    # - optional markdown bold (** ... **)
+    # - optional whitespace before colon
+    # - case-insensitive
     headings = [
-        r"Description:",
-        r"Safety Concerns:",
-        r"Quality Concerns:",
-        r"Safety Issues:",
-        r"Quality Issues:",
+        r"\*{0,2}\s*Description\s*\*{0,2}\s*:?",
+        r"\*{0,2}\s*Quality\s*Concerns\s*\*{0,2}\s*:?",
+        r"\*{0,2}\s*Safety\s*Concerns\s*\*{0,2}\s*:?",
+        r"\*{0,2}\s*Safety\s*Issues\s*\*{0,2}\s*:?",
+        r"\*{0,2}\s*Quality\s*Issues\s*\*{0,2}\s*:?",
     ]
 
     # Find earliest match (case-insensitive)
