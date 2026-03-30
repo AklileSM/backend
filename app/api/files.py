@@ -55,6 +55,7 @@ def _serialize_asset(asset: FileAsset) -> MediaFileResponse:
 
     uploaded_by = meta.get("uploaded_by_user_id")
     uploaded_by_str = str(uploaded_by) if uploaded_by is not None else None
+    conversion_error = meta.get("conversion_error") if asset.media_type == "pointcloud" else None
     return MediaFileResponse(
         id=asset.id,
         src=src,
@@ -64,6 +65,7 @@ def _serialize_asset(asset: FileAsset) -> MediaFileResponse:
         capture_date=asset.capture_date,
         uploaded_by_user_id=uploaded_by_str,
         conversion_status=conversion_status,
+        conversion_error=conversion_error,
     )
 
 

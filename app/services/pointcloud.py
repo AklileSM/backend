@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -10,12 +11,25 @@ from app.services.storage import storage_service
 
 logger = logging.getLogger(__name__)
 
-# PotreeConverter binary — installed in the Docker image at build time.
-# Override with the POTREE_CONVERTER_PATH env var if needed.
-_POTREE_CONVERTER = os.environ.get("POTREE_CONVERTER_PATH", "/opt/potree/PotreeConverter")
-
 # Timeout in seconds for the conversion subprocess (10 minutes).
 _CONVERSION_TIMEOUT = 600
+
+
+def _find_converter() -> str:
+    """Locate the PotreeConverter binary.
+
+    Resolution order:
+    1. POTREE_CONVERTER_PATH environment variable
+    2. Anywhere on PATH  (symlinked to /usr/local/bin in the Docker image)
+    3. Hard-coded fallback inside /opt/potree
+    """
+    env = os.environ.get("POTREE_CONVERTER_PATH")
+    if env:
+        return env
+    on_path = shutil.which("PotreeConverter")
+    if on_path:
+        return on_path
+    return "/usr/local/bin/PotreeConverter"
 
 
 def convert_pointcloud_background(asset_id: str, laz_tmp_path: str) -> None:
@@ -28,8 +42,15 @@ def convert_pointcloud_background(asset_id: str, laz_tmp_path: str) -> None:
     try:
         _set_status(db, asset_id, "processing")
 
+        converter = _find_converter()
+        if not os.path.isfile(converter):
+            raise RuntimeError(
+                f"PotreeConverter binary not found at '{converter}'. "
+                "Set POTREE_CONVERTER_PATH or rebuild the Docker image."
+            )
+
         with tempfile.TemporaryDirectory() as output_dir:
-            cmd = [_POTREE_CONVERTER, laz_tmp_path, "-o", output_dir]
+            cmd = [converter, laz_tmp_path, "-o", output_dir]
             logger.info("Starting PotreeConverter for asset %s: %s", asset_id, " ".join(cmd))
 
             result = subprocess.run(
@@ -40,8 +61,9 @@ def convert_pointcloud_background(asset_id: str, laz_tmp_path: str) -> None:
             )
 
             if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "no output")[:600]
                 raise RuntimeError(
-                    f"PotreeConverter exited {result.returncode}: {result.stderr[:500]}"
+                    f"PotreeConverter exited {result.returncode}: {detail}"
                 )
 
             asset = db.get(FileAsset, asset_id)

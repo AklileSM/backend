@@ -13,6 +13,7 @@ class MediaFileResponse(BaseModel):
     capture_date: date
     uploaded_by_user_id: str | None = None
     conversion_status: str | None = None
+    conversion_error: str | None = None
 
 
 class MyUploadItemResponse(BaseModel):
