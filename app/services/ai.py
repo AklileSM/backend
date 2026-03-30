@@ -160,9 +160,9 @@ async def analyze_image_url(
                                     "Return ONLY the final report text. Do NOT include any reasoning, step-by-step thinking, or planning.\n\n"
                                     "Use exactly this format:\n"
                                     "**Description:**\n"
-                                    "(5-7 sentences paragraph. Panoramic/360 aware. Describe what is visible; avoid alignment/misalignment assumptions unless clearly visible.)\n\n"
+                                    "(5-7 sentences paragraph. Panoramic/360 aware. Describe what is visible; avoid alignment/misalignment assumptions unless clearly visible.)\n"
                                     "**Quality Concerns:**\n"
-                                    "(1-5 numbered items \n"
+                                    "(1-5 numbered items.)\n"
                                     "**Safety Concerns:**\n"
                                     "(1-5 numbered items.)\n",
                             },
