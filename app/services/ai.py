@@ -94,10 +94,9 @@ async def analyze_image_url(
     file_id: str | None = None,
     db: Session | None = None,
 ) -> dict[str, Any]:
-    if not (settings.hyperbolic_api_key or "").strip():
-        raise ValueError(
-            "HYPERBOLIC_API_KEY is not set. Add it to backend .env (see .env.example)."
-        )
+    # Some OpenAI-compatible providers (e.g. local Ollama) do not require auth.
+    # Keep the code tolerant of an empty key.
+    api_key = (settings.hyperbolic_api_key or "").strip()
 
     async with httpx.AsyncClient(timeout=120) as client:
         vision_url, cache_key = await _resolve_vision_url(client, db, image_url, file_id)
@@ -105,12 +104,15 @@ async def analyze_image_url(
         if cache_key in _cache:
             return {"description": _cache[cache_key], "cached": True}
 
+        headers: dict[str, str] = {
+            "Content-Type": "application/json",
+        }
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
         response = await client.post(
             settings.hyperbolic_api_url,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {settings.hyperbolic_api_key}",
-            },
+            headers=headers,
             json={
                 "model": settings.hyperbolic_model,
                 "messages": [
@@ -139,13 +141,13 @@ async def analyze_image_url(
         except httpx.HTTPStatusError as e:
             snippet = (e.response.text or "")[:800]
             raise RuntimeError(
-                f"Hyperbolic HTTP {e.response.status_code}: {snippet or e.response.reason_phrase}"
+                f"AI provider HTTP {e.response.status_code}: {snippet or e.response.reason_phrase}"
             ) from e
 
         payload = response.json()
         choices = payload.get("choices") or []
         if not choices:
-            raise RuntimeError(f"Unexpected Hyperbolic response (no choices): {payload!r}"[:500])
+            raise RuntimeError(f"Unexpected AI provider response (no choices): {payload!r}"[:500])
 
         msg = choices[0].get("message") or {}
         content = msg.get("content")
@@ -158,7 +160,7 @@ async def analyze_image_url(
             raise RuntimeError(f"Unexpected message content shape: {type(content)}")
 
         if not description:
-            raise RuntimeError("Hyperbolic returned an empty description")
+            raise RuntimeError("AI provider returned an empty description")
 
         _cache[cache_key] = description
         return {"description": description, "cached": False}
