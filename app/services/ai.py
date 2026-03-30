@@ -171,11 +171,10 @@ async def analyze_image_url(
             description = raw_text
 
         if not description:
-            description = (msg.get("thinking") or "").strip()
+            description = (msg.get("reasoning") or msg.get("thinking") or "").strip()
 
         if not description:
-            debug = f"msg_keys={list(msg.keys())} content={str(content)[:200]!r} thinking={str(msg.get('thinking',''))[:200]!r}"
-            raise RuntimeError(f"Vision model returned an empty description. {debug}")
+            raise RuntimeError("Vision model returned an empty description")
 
         _cache[cache_key] = description
         return {"description": description, "cached": False}
