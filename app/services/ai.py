@@ -155,15 +155,18 @@ async def analyze_image_url(
         else:
             raise RuntimeError(f"Unexpected message content shape: {type(content)}")
 
-        # Qwen3 thinking models wrap their reasoning in <think>...</think> blocks.
-        # Strip those out; use whatever visible text remains, or fall back to the
-        # thinking content itself if nothing follows (shouldn't normally happen).
+        # Qwen3 thinking models may put reasoning in <think>…</think> inline blocks
+        # or in a separate `message.thinking` field, leaving `content` empty.
+        # Strip inline think blocks first; fall back to the thinking field if needed.
         think_match = re.search(r"<think>(.*?)</think>(.*)", raw_text, re.DOTALL)
         if think_match:
             visible = think_match.group(2).strip()
             description = visible if visible else think_match.group(1).strip()
         else:
             description = raw_text
+
+        if not description:
+            description = (msg.get("thinking") or "").strip()
 
         if not description:
             raise RuntimeError("Vision model returned an empty description")
