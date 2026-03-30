@@ -1,7 +1,7 @@
 from collections import defaultdict
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response as PlainResponse, StreamingResponse
 from sqlalchemy import case, cast, func, select
 from sqlalchemy.dialects.postgresql import JSONB
@@ -237,12 +237,16 @@ def get_conversion_status(
 def proxy_pointcloud_file(
     asset_id: str,
     path: str,
+    request: Request,
     db: Session = Depends(get_db),
-) -> StreamingResponse:
+) -> PlainResponse:
     """
     Proxy individual Potree octree files (metadata.json, hierarchy.bin, octree.bin)
     from MinIO so the browser fetches them on the same origin — no CORS config needed.
-    Potree automatically resolves sibling files relative to the metadata.json URL.
+
+    Potree 2.x issues byte-range requests (Range: bytes=X-Y) to read specific
+    chunks of hierarchy.bin and octree.bin.  We must honour these or Potree will
+    receive more bytes than it expects and corrupt its node-count arithmetic.
     """
     if ".." in path or path.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid path")
@@ -263,17 +267,40 @@ def proxy_pointcloud_file(
     object_name = base_object + filename
     try:
         response = storage_service.stream_object(asset.bucket_name, object_name)
+        data = response.read()
     except Exception:
         raise HTTPException(status_code=404, detail="File not found in storage")
+    finally:
+        try:
+            response.close()
+            response.release_conn()
+        except Exception:
+            pass
 
     content_type = "application/json" if filename.endswith(".json") else "application/octet-stream"
+    total = len(data)
 
-    # Read fully into memory so Nginx buffering / chunked-encoding issues
-    # can't truncate or corrupt the binary data that Potree parses.
-    try:
-        data = response.read()
-    finally:
-        response.close()
-        response.release_conn()
+    range_header = request.headers.get("range")
+    if range_header:
+        import re
+        m = re.match(r"bytes=(\d+)-(\d+)", range_header.strip())
+        if m:
+            first = int(m.group(1))
+            last = min(int(m.group(2)), total - 1)
+            chunk = data[first : last + 1]
+            return PlainResponse(
+                content=chunk,
+                status_code=206,
+                media_type=content_type,
+                headers={
+                    "Content-Range": f"bytes {first}-{last}/{total}",
+                    "Content-Length": str(len(chunk)),
+                    "Accept-Ranges": "bytes",
+                },
+            )
 
-    return PlainResponse(content=data, media_type=content_type)
+    return PlainResponse(
+        content=data,
+        media_type=content_type,
+        headers={"Accept-Ranges": "bytes", "Content-Length": str(total)},
+    )
