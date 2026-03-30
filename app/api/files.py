@@ -2,6 +2,7 @@ from collections import defaultdict
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import case, cast, func, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, selectinload
@@ -22,6 +23,8 @@ from app.services.storage import storage_service
 
 router = APIRouter()
 
+_POTREE_FILES = frozenset({"metadata.json", "hierarchy.bin", "octree.bin"})
+
 
 def _media_key(media_type: str) -> str:
     if media_type == "pointcloud":
@@ -34,11 +37,22 @@ def _media_key(media_type: str) -> str:
 
 
 def _serialize_asset(asset: FileAsset) -> MediaFileResponse:
-    full_src = storage_service.get_presigned_url(asset.bucket_name, asset.object_name)
-    src = full_src
-    if asset.thumbnail_bucket_name and asset.thumbnail_object_name:
-        src = storage_service.get_presigned_url(asset.thumbnail_bucket_name, asset.thumbnail_object_name)
     meta = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    conversion_status = meta.get("conversion_status") if asset.media_type == "pointcloud" else None
+
+    if asset.media_type == "pointcloud" and conversion_status == "ready":
+        # Serve via the backend proxy so Potree can fetch all sibling files
+        # (hierarchy.bin, octree.bin) on the same origin without CORS issues.
+        full_src = f"/api/files/{asset.id}/pointcloud/metadata.json"
+        src = full_src
+    else:
+        full_src = storage_service.get_presigned_url(asset.bucket_name, asset.object_name)
+        src = full_src
+        if asset.thumbnail_bucket_name and asset.thumbnail_object_name:
+            src = storage_service.get_presigned_url(
+                asset.thumbnail_bucket_name, asset.thumbnail_object_name
+            )
+
     uploaded_by = meta.get("uploaded_by_user_id")
     uploaded_by_str = str(uploaded_by) if uploaded_by is not None else None
     return MediaFileResponse(
@@ -49,6 +63,7 @@ def _serialize_asset(asset: FileAsset) -> MediaFileResponse:
         full_src=full_src,
         capture_date=asset.capture_date,
         uploaded_by_user_id=uploaded_by_str,
+        conversion_status=conversion_status,
     )
 
 
@@ -61,10 +76,20 @@ def _empty_group() -> RoomMediaGroup:
 
 
 def _serialize_my_upload(asset: FileAsset, room: Room) -> MyUploadItemResponse:
-    full_src = storage_service.get_presigned_url(asset.bucket_name, asset.object_name)
-    src = full_src
-    if asset.thumbnail_bucket_name and asset.thumbnail_object_name:
-        src = storage_service.get_presigned_url(asset.thumbnail_bucket_name, asset.thumbnail_object_name)
+    meta = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    conversion_status = meta.get("conversion_status") if asset.media_type == "pointcloud" else None
+
+    if asset.media_type == "pointcloud" and conversion_status == "ready":
+        full_src = f"/api/files/{asset.id}/pointcloud/metadata.json"
+        src = full_src
+    else:
+        full_src = storage_service.get_presigned_url(asset.bucket_name, asset.object_name)
+        src = full_src
+        if asset.thumbnail_bucket_name and asset.thumbnail_object_name:
+            src = storage_service.get_presigned_url(
+                asset.thumbnail_bucket_name, asset.thumbnail_object_name
+            )
+
     return MyUploadItemResponse(
         id=asset.id,
         room_slug=room.slug,
@@ -75,6 +100,7 @@ def _serialize_my_upload(asset: FileAsset, room: Room) -> MyUploadItemResponse:
         created_at=asset.created_at,
         src=src,
         full_src=full_src,
+        conversion_status=conversion_status,
     )
 
 
@@ -187,3 +213,65 @@ def get_file_url(file_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
     if asset is None:
         raise HTTPException(status_code=404, detail="File not found")
     return {"url": storage_service.get_presigned_url(asset.bucket_name, asset.object_name)}
+
+
+@router.get("/{asset_id}/conversion-status")
+def get_conversion_status(
+    asset_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Poll the conversion status of a point cloud asset."""
+    asset = db.scalar(select(FileAsset).where(FileAsset.id == asset_id))
+    if asset is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    meta = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    return {
+        "status": meta.get("conversion_status", "unknown"),
+        "error": meta.get("conversion_error"),
+    }
+
+
+@router.get("/{asset_id}/pointcloud/{path:path}")
+def proxy_pointcloud_file(
+    asset_id: str,
+    path: str,
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """
+    Proxy individual Potree octree files (metadata.json, hierarchy.bin, octree.bin)
+    from MinIO so the browser fetches them on the same origin — no CORS config needed.
+    Potree automatically resolves sibling files relative to the metadata.json URL.
+    """
+    if ".." in path or path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    asset = db.scalar(select(FileAsset).where(FileAsset.id == asset_id))
+    if asset is None or asset.media_type != "pointcloud":
+        raise HTTPException(status_code=404, detail="Not found")
+
+    meta = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    base_object = meta.get("potree_base_object")
+    if not base_object:
+        raise HTTPException(status_code=404, detail="Point cloud not yet converted")
+
+    filename = path.split("/")[-1]
+    if filename not in _POTREE_FILES:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    object_name = base_object + filename
+    try:
+        response = storage_service.stream_object(asset.bucket_name, object_name)
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not found in storage")
+
+    content_type = "application/json" if filename.endswith(".json") else "application/octet-stream"
+
+    def _stream():
+        try:
+            for chunk in response.stream(amt=65536):
+                yield chunk
+        finally:
+            response.close()
+            response.release_conn()
+
+    return StreamingResponse(_stream(), media_type=content_type)

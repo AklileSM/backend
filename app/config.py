@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     cors_extra_origins: str = ""
     presigned_url_expiry_seconds: int = 604800
-    max_upload_size_bytes: int = 524288000
+    max_upload_size_bytes: int = 5368709120  # 5 GB — large enough for LAZ point clouds
     thumbnail_width: int = 400
     thumbnail_height: int = 300
     thumbnail_quality: int = 82

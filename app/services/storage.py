@@ -46,6 +46,26 @@ class StorageService:
             content_type=content_type,
         )
 
+    def upload_file_path(
+        self,
+        *,
+        bucket_name: str,
+        object_name: str,
+        file_path: str,
+        content_type: str,
+    ) -> None:
+        """Upload a large file from disk without loading it into memory."""
+        self.client.fput_object(
+            bucket_name,
+            object_name,
+            file_path,
+            content_type=content_type,
+        )
+
+    def stream_object(self, bucket_name: str, object_name: str):
+        """Return a streaming MinIO response. Caller must close it."""
+        return self.client.get_object(bucket_name, object_name)
+
     def get_presigned_url(self, bucket_name: str, object_name: str) -> str:
         return self.client.presigned_get_object(
             bucket_name,

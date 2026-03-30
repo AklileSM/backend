@@ -12,6 +12,7 @@ class MediaFileResponse(BaseModel):
     full_src: str | None = None
     capture_date: date
     uploaded_by_user_id: str | None = None
+    conversion_status: str | None = None
 
 
 class MyUploadItemResponse(BaseModel):
@@ -26,6 +27,7 @@ class MyUploadItemResponse(BaseModel):
     created_at: datetime
     src: str
     full_src: str | None = None
+    conversion_status: str | None = None
 
 
 class RoomMediaGroup(BaseModel):
