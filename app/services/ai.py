@@ -198,14 +198,23 @@ async def analyze_image_url(
             # Some Ollama/OpenAI-compat adapters return the actual text under `reasoning`
             # while leaving `content` empty. Fall back to that.
             reasoning = msg.get("reasoning")
-            if isinstance(reasoning, str) and reasoning.strip():
+            reasoning_is_str = isinstance(reasoning, str)
+            reasoning_nonempty = reasoning_is_str and bool(reasoning.strip())
+            if reasoning_nonempty:
                 description = reasoning.strip()
 
         if not description:
             # Include a small provider payload snippet for faster debugging.
             payload_snippet = json.dumps(payload, ensure_ascii=False)[:1200]
+            # Also include whether `reasoning` was present, since some adapters put the text there.
+            reasoning_preview = ""
+            if isinstance(msg.get("reasoning"), str):
+                reasoning_preview = msg.get("reasoning", "")[:120].replace("\n", "\\n")
+            reasoning_present = isinstance(msg.get("reasoning"), str) and bool(msg.get("reasoning").strip())
             raise RuntimeError(
-                f"AI provider returned an empty description. payload_snippet={payload_snippet}"
+                "AI provider returned an empty description. "
+                f"reasoning_present={reasoning_present} reasoning_preview={reasoning_preview!r} "
+                f"payload_snippet={payload_snippet}"
             )
 
         _cache[cache_key] = description
