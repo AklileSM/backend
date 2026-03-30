@@ -195,9 +195,18 @@ async def analyze_image_url(
                 raise RuntimeError(f"Unexpected message content shape: {type(content)}")
 
         if not description:
+            # Some Ollama/OpenAI-compat adapters return the actual text under `reasoning`
+            # while leaving `content` empty. Fall back to that.
+            reasoning = msg.get("reasoning")
+            if isinstance(reasoning, str) and reasoning.strip():
+                description = reasoning.strip()
+
+        if not description:
             # Include a small provider payload snippet for faster debugging.
             payload_snippet = json.dumps(payload, ensure_ascii=False)[:1200]
-            raise RuntimeError(f"AI provider returned an empty description. payload_snippet={payload_snippet}")
+            raise RuntimeError(
+                f"AI provider returned an empty description. payload_snippet={payload_snippet}"
+            )
 
         _cache[cache_key] = description
         return {"description": description, "cached": False}
