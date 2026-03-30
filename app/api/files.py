@@ -281,6 +281,7 @@ def proxy_pointcloud_file(
     total = len(data)
 
     range_header = request.headers.get("range")
+    logger.debug("pointcloud proxy: %s total=%d range=%s", filename, total, range_header)
     if range_header:
         import re
         m = re.match(r"bytes=(\d+)-(\d+)", range_header.strip())
