@@ -134,6 +134,7 @@ async def analyze_image_url(
                 "top_p": 0.9,
                 "frequency_penalty": 1.3,
                 "stream": False,
+                "options": {"think": False},
             },
         )
         try:
