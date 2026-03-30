@@ -117,19 +117,18 @@ async def analyze_image_url(
                             {
                                 "type": "text",
                                 "text": (
-                                    "You are an experienced construction site safety and quality inspector. Analyze this image thoroughly.\n\n"
-                                    "Provide a report with exactly three sections:\n\n"
-                                    "1. SCENE: Describe the type of work, materials, construction stage, number of workers, and key elements visible.\n\n"
-                                    "2. QUALITY ISSUES: Examine closely for anything that does not meet standard construction quality. Construction sites almost always have something worth noting  look carefully.\n\n"
-                                    "3. SAFETY ISSUES: Look for any condition that poses risk. Even partial or potential hazards count.\n\n"
-                                    "Be specific and direct. Do not repeat points across sections. Do not use vague filler phrases."
+                                    "You are a construction site inspector. Look at this image and write a short report with three sections:\n\n"
+                                    "SCENE: Describe what you see in general.\n\n"
+                                    "QUALITY ISSUES: Note any quality or workmanship concerns visible.\n\n"
+                                    "SAFETY ISSUES: Note any safety concerns visible.\n\n"
+                                    "Keep each section concise. Do not repeat points."
                                 ),
                             },
                             {"type": "image_url", "image_url": {"url": vision_url}},
                         ],
                     }
                 ],
-                "max_tokens": 700,
+                "max_tokens": 4096,
                 "temperature": 0.3,
                 "top_p": 0.9,
                 "frequency_penalty": 1.3,
