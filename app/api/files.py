@@ -1,7 +1,10 @@
+import logging
 from collections import defaultdict
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+
+logger = logging.getLogger(__name__)
 from fastapi.responses import Response as PlainResponse, StreamingResponse
 from sqlalchemy import case, cast, func, select
 from sqlalchemy.dialects.postgresql import JSONB
