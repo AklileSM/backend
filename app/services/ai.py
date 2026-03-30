@@ -15,7 +15,7 @@ from app.services.storage import storage_service
 
 settings = get_settings()
 
-_cache: dict[str, str] = {}
+_cache: dict[str, str] = {}  # keyed by image identity; cleared on restart
 
 
 def _bytes_to_data_url(data: bytes, content_type: str | None, name_hint: str) -> str:
@@ -117,17 +117,20 @@ async def analyze_image_url(
                             {
                                 "type": "text",
                                 "text": (
-                                    "Describe what is in this construction image. "
-                                    "Also identify quality issues and safety issues."
+                                    "You are a construction site inspector. Analyze this image and provide a concise report with three sections:\n\n"
+                                    "1. SCENE: What is visible — type of work, materials, stage of construction, approximate number of workers, specific locations.\n"
+                                    "2. QUALITY ISSUES: Specific defects or incomplete work you can actually see. Be concrete.\n"
+                                    "3. SAFETY ISSUES: Specific hazards visible in the image — missing PPE, unsafe structures, exposed hazards. Be concrete.\n\n"
+                                    "Rules: Do not repeat the same point across sections. Only report what is clearly visible. Be specific, not generic."
                                 ),
                             },
                             {"type": "image_url", "image_url": {"url": vision_url}},
                         ],
                     }
                 ],
-                "max_tokens": 500,
-                "temperature": 0.1,
-                "top_p": 0.001,
+                "max_tokens": 700,
+                "temperature": 0.35,
+                "top_p": 0.9,
                 "stream": False,
             },
         )
