@@ -2,6 +2,7 @@ import json
 import base64
 import ipaddress
 import mimetypes
+import re
 from typing import Any
 from urllib.parse import urlparse, urljoin
 
@@ -16,6 +17,33 @@ from app.services.storage import storage_service
 settings = get_settings()
 
 _cache: dict[str, str] = {}
+
+def _extract_final_sections(text: str) -> str:
+    """
+    Attempt to remove any leading 'thinking' / scratchpad content by slicing
+    from the first known section heading.
+    """
+    t = (text or "").strip()
+    if not t:
+        return t
+
+    headings = [
+        r"Description:",
+        r"Safety Concerns:",
+        r"Quality Concerns:",
+        r"Safety Issues:",
+        r"Quality Issues:",
+    ]
+
+    # Find earliest match (case-insensitive)
+    earliest: int | None = None
+    for h in headings:
+        m = re.search(h, t, flags=re.IGNORECASE)
+        if m:
+            idx = m.start()
+            earliest = idx if earliest is None else min(earliest, idx)
+
+    return t[earliest:].strip() if earliest is not None else t
 
 
 def _bytes_to_data_url(data: bytes, content_type: str | None, name_hint: str) -> str:
@@ -123,8 +151,14 @@ async def analyze_image_url(
                             {
                                 "type": "text",
                                 "text": (
-                                    "Describe what is in this construction image. "
-                                    "Also identify quality issues and safety issues."
+                                    "Return ONLY the final report text. Do NOT include any reasoning, step-by-step thinking, or planning.\n\n"
+                                    "Use exactly this format:\n"
+                                    "Description:\n"
+                                    "- (1-5 sentences describing what is visible)\n\n"
+                                    "Quality Concerns:\n"
+                                    "- (0-5 bullet points)\n\n"
+                                    "Safety Concerns:\n"
+                                    "- (0-5 bullet points)\n"
                                 ),
                             },
                             {"type": "image_url", "image_url": {"url": vision_url}},
@@ -202,6 +236,8 @@ async def analyze_image_url(
             reasoning_nonempty = reasoning_is_str and bool(reasoning.strip())
             if reasoning_nonempty:
                 description = reasoning.strip()
+
+        description = _extract_final_sections(description)
 
         if not description:
             # Include a small provider payload snippet for faster debugging.
