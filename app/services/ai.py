@@ -165,7 +165,7 @@ async def analyze_image_url(
                                     "(1-5 numbered items.)\n"
                                     "**Safety Concerns:**\n"
                                     "(1-5 numbered items.)\n",
-                            },
+        )},
                             {"type": "image_url", "image_url": {"url": vision_url}},
                         ],
                     }
