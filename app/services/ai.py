@@ -117,6 +117,7 @@ async def analyze_image_url(
                             {
                                 "type": "text",
                                 "text": (
+                                    "/no_think\n\n"
                                     "You are an experienced construction site safety and quality inspector. Analyze this image thoroughly.\n\n"
                                     "Provide a report with exactly three sections:\n\n"
                                     "1. SCENE: Describe the type of work, materials, construction stage, number of workers, and key elements visible.\n\n"
@@ -134,7 +135,7 @@ async def analyze_image_url(
                 "top_p": 0.9,
                 "frequency_penalty": 1.3,
                 "stream": False,
-                "options": {"think": False},
+                "think": False,
             },
         )
         try:
