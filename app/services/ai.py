@@ -1,6 +1,7 @@
 import base64
 import ipaddress
 import mimetypes
+import re
 from typing import Any
 from urllib.parse import urlparse, urljoin
 
@@ -53,7 +54,7 @@ async def _resolve_vision_url(
     file_id: str | None,
 ) -> tuple[str, str]:
     """
-    Returns (url_or_data_url_for_hyperbolic, cache_key).
+    Returns (url_or_data_url_for_vision_api, cache_key).
     """
     if file_id and db is not None:
         asset = db.scalar(select(FileAsset).where(FileAsset.id == file_id))
@@ -148,14 +149,24 @@ async def analyze_image_url(
 
         if isinstance(content, list):
             parts = [p.get("text", "") for p in content if isinstance(p, dict)]
-            description = "".join(parts).strip()
+            raw_text = "".join(parts).strip()
         elif isinstance(content, str):
-            description = content.strip()
+            raw_text = content.strip()
         else:
             raise RuntimeError(f"Unexpected message content shape: {type(content)}")
 
+        # Qwen3 thinking models wrap their reasoning in <think>...</think> blocks.
+        # Strip those out; use whatever visible text remains, or fall back to the
+        # thinking content itself if nothing follows (shouldn't normally happen).
+        think_match = re.search(r"<think>(.*?)</think>(.*)", raw_text, re.DOTALL)
+        if think_match:
+            visible = think_match.group(2).strip()
+            description = visible if visible else think_match.group(1).strip()
+        else:
+            description = raw_text
+
         if not description:
-            raise RuntimeError("Hyperbolic returned an empty description")
+            raise RuntimeError("Vision model returned an empty description")
 
         _cache[cache_key] = description
         return {"description": description, "cached": False}

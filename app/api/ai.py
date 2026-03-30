@@ -21,8 +21,6 @@ async def analyze_image(
         )
         return AnalyzeImageResponse(**result)
     except ValueError as exc:
-        msg = str(exc)
-        status = 503 if "HYPERBOLIC_API_KEY" in msg else 400
-        raise HTTPException(status_code=status, detail=msg) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI analysis failed: {exc}") from exc
