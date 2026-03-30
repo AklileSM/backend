@@ -121,7 +121,7 @@ async def analyze_image_url(
                                     "1. SCENE: What is visible — type of work, materials, stage of construction, approximate number of workers, specific locations.\n"
                                     "2. QUALITY ISSUES: Specific defects or incomplete work you can actually see. Be concrete.\n"
                                     "3. SAFETY ISSUES: Specific hazards visible in the image — missing PPE, unsafe structures, exposed hazards. Be concrete.\n\n"
-                                    "Rules: Do not repeat the same point across sections. Only report what is clearly visible. Be specific, not generic."
+                                    "Rules: Do not repeat the same point across sections. Only report what is clearly visible. Be specific, not generic. If no issues are visible in a section, write 'None observed.' Do not invent or speculate."
                                 ),
                             },
                             {"type": "image_url", "image_url": {"url": vision_url}},
