@@ -128,7 +128,7 @@ async def analyze_image_url(
                         ],
                     }
                 ],
-                "max_tokens": 4096,
+                "max_tokens": 1000,
                 "temperature": 0.3,
                 "top_p": 0.9,
                 "frequency_penalty": 1.3,
