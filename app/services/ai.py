@@ -153,12 +153,19 @@ async def analyze_image_url(
                                 "text": (
                                     "Return ONLY the final report text. Do NOT include any reasoning, step-by-step thinking, or planning.\n\n"
                                     "Use exactly this format:\n"
-                                    "Description:\n"
-                                    "- (1-5 sentences describing what is visible)\n\n"
-                                    "Quality Concerns:\n"
-                                    "- (0-5 bullet points)\n\n"
-                                    "Safety Concerns:\n"
-                                    "- (0-5 bullet points)\n"
+                                    "**Description:**\n"
+                                    "(Write 5-8 sentences in paragraph form. No bullet points for Description.)\n"
+                                    "This is a panoramic/360 image: account for wide-angle distortion and avoid assuming elements are misaligned unless misalignment is clearly visible across the scene.\n\n"
+                                    "**Quality Concerns:**\n"
+                                    "(Provide 0-5 numbered items. If none, write exactly: \"1. None identified.\" )\n"
+                                    "Use numbered items like:\n"
+                                    "1. ...\n"
+                                    "2. ...\n\n"
+                                    "**Safety Concerns:**\n"
+                                    "(Provide 0-5 numbered items. If none, write exactly: \"1. None identified.\" )\n"
+                                    "Use numbered items like:\n"
+                                    "1. ...\n"
+                                    "2. ...\n"
                                 ),
                             },
                             {"type": "image_url", "image_url": {"url": vision_url}},
