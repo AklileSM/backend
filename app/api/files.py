@@ -2,7 +2,7 @@ from collections import defaultdict
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response as PlainResponse, StreamingResponse
 from sqlalchemy import case, cast, func, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, selectinload
@@ -268,12 +268,12 @@ def proxy_pointcloud_file(
 
     content_type = "application/json" if filename.endswith(".json") else "application/octet-stream"
 
-    def _stream():
-        try:
-            for chunk in response.stream(amt=65536):
-                yield chunk
-        finally:
-            response.close()
-            response.release_conn()
+    # Read fully into memory so Nginx buffering / chunked-encoding issues
+    # can't truncate or corrupt the binary data that Potree parses.
+    try:
+        data = response.read()
+    finally:
+        response.close()
+        response.release_conn()
 
-    return StreamingResponse(_stream(), media_type=content_type)
+    return PlainResponse(content=data, media_type=content_type)
