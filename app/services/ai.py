@@ -121,7 +121,7 @@ async def analyze_image_url(
                                     "SCENE: Describe what you see — the space, ongoing work, materials, workers, and overall condition.\n\n"
                                     "QUALITY ISSUES: Describe any quality or workmanship concerns in detail. Explain what is wrong and where.\n\n"
                                     "SAFETY ISSUES: Describe any safety concerns in detail. Explain the hazard and its location or cause.\n\n"
-                                    "Write up to 4 sentences per section. Do not repeat points across sections."
+                                    "Write up to 3 sentences per section. Do not repeat points across sections."
                                 ),
                             },
                             {"type": "image_url", "image_url": {"url": vision_url}},
