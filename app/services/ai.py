@@ -155,17 +155,16 @@ async def analyze_image_url(
                             {
                                 "type": "text",
                                 "text": (
+                                    "Describe what is in this construction image. "
+                                    "Also identify quality issues and safety issues."
                                     "Return ONLY the final report text. Do NOT include any reasoning, step-by-step thinking, or planning.\n\n"
                                     "Use exactly this format:\n"
                                     "**Description:**\n"
                                     "(5-7 sentences paragraph. Panoramic/360 aware. Describe what is visible; avoid alignment/misalignment assumptions unless clearly visible.)\n\n"
                                     "**Quality Concerns:**\n"
-                                    "(1-5 numbered items. If uncertain, prefix each item with \"Possible:\" or \"Unclear:\". "
-                                    "If you see no quality concerns at all, write exactly: \"1. Unclear from this image.\".)\n\n"
+                                    "(1-5 numbered items \n"
                                     "**Safety Concerns:**\n"
-                                    "(1-5 numbered items. If uncertain, prefix each item with \"Possible:\" or \"Unclear:\". "
-                                    "If you see no safety concerns at all, write exactly: \"1. Unclear from this image.\".)\n"
-                                ),
+                                    "(1-5 numbered items.)\n",
                             },
                             {"type": "image_url", "image_url": {"url": vision_url}},
                         ],
