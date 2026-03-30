@@ -2,9 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Runtime libraries needed by PotreeConverter (OpenMP, C++ STL, Intel TBB)
+# Runtime libraries needed by PotreeConverter (OpenMP, C++ STL, Intel TBB, LASzip)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget unzip libgomp1 libstdc++6 libtbb12 \
+    wget unzip libgomp1 libstdc++6 libtbb12 liblaszip-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install PotreeConverter 2.1.2 — pre-built Linux binary.
@@ -18,7 +18,8 @@ RUN wget -q "$POTREE_CONVERTER_URL" -O /tmp/pc.zip \
     && chmod +x "$POTREE_BIN" \
     && ln -sf "$POTREE_BIN" /usr/local/bin/PotreeConverter \
     && rm /tmp/pc.zip \
-    && echo "PotreeConverter installed at: $POTREE_BIN"
+    && echo "PotreeConverter installed at: $POTREE_BIN" \
+    && ldd /usr/local/bin/PotreeConverter
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
