@@ -94,27 +94,21 @@ async def analyze_image_url(
     file_id: str | None = None,
     db: Session | None = None,
 ) -> dict[str, Any]:
-    if not (settings.hyperbolic_api_key or "").strip():
-        raise ValueError(
-            "HYPERBOLIC_API_KEY is not set. Add it to backend .env (see .env.example)."
-        )
-
     async with httpx.AsyncClient(timeout=120) as client:
         vision_url, cache_key = await _resolve_vision_url(client, db, image_url, file_id)
 
         if cache_key in _cache:
             return {"description": _cache[cache_key], "cached": True}
 
-        headers: dict[str, str] = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {settings.hyperbolic_api_key}",
-        }
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if settings.vision_api_key:
+            headers["Authorization"] = f"Bearer {settings.vision_api_key}"
 
         response = await client.post(
-            settings.hyperbolic_api_url,
+            settings.vision_api_url,
             headers=headers,
             json={
-                "model": settings.hyperbolic_model,
+                "model": settings.vision_model,
                 "messages": [
                     {
                         "role": "user",
@@ -141,13 +135,13 @@ async def analyze_image_url(
         except httpx.HTTPStatusError as e:
             snippet = (e.response.text or "")[:800]
             raise RuntimeError(
-                f"Hyperbolic HTTP {e.response.status_code}: {snippet or e.response.reason_phrase}"
+                f"Vision API HTTP {e.response.status_code}: {snippet or e.response.reason_phrase}"
             ) from e
 
         payload = response.json()
         choices = payload.get("choices") or []
         if not choices:
-            raise RuntimeError(f"Unexpected Hyperbolic response (no choices): {payload!r}"[:500])
+            raise RuntimeError(f"Unexpected vision API response (no choices): {payload!r}"[:500])
 
         msg = choices[0].get("message") or {}
         content = msg.get("content")

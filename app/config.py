@@ -32,14 +32,13 @@ class Settings(BaseSettings):
     minio_bucket_pdfs: str = "construction-pdfs"
     minio_bucket_reports: str = "construction-reports"
 
-    hyperbolic_api_key: str = ""
-    hyperbolic_api_url: str = "https://api.hyperbolic.xyz/v1/chat/completions"
+    vision_api_key: str = ""
+    vision_api_url: str = "http://192.168.50.103:11434/v1/chat/completions"
+    vision_model: str = "qwen3-vl:8b"
 
-    hyperbolic_model: str = "Qwen/Qwen2.5-VL-72B-Instruct"
-
-    @field_validator("hyperbolic_api_key", mode="before")
+    @field_validator("vision_api_key", mode="before")
     @classmethod
-    def strip_hyperbolic_api_key(cls, v: object) -> object:
+    def strip_vision_api_key(cls, v: object) -> object:
         if isinstance(v, str):
             return v.strip()
         return v
