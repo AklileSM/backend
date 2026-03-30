@@ -117,11 +117,12 @@ async def analyze_image_url(
                             {
                                 "type": "text",
                                 "text": (
-                                    "You are a construction site inspector. Analyze this image and provide a concise report with three sections:\n\n"
-                                    "1. SCENE DESCRIPTION: What is visible — type of work, materials, stage of construction, approximate number of workers, specific locations.\n"
-                                    "2. QUALITY ISSUES: Specific defects or incomplete work you can actually see. Be concrete.\n"
-                                    "3. SAFETY ISSUES: Specific hazards visible in the image — missing PPE, unsafe structures, exposed hazards. Be concrete.\n\n"
-                                    "Rules: Do not repeat the same point across sections. Only report what is clearly visible. Be specific, not generic. If no issues are visible in a section, write 'None observed.' Do not invent or speculate."
+                                    "You are an experienced construction site safety and quality inspector. Analyze this image thoroughly.\n\n"
+                                    "Provide a report with exactly three sections:\n\n"
+                                    "1. SCENE: Describe the type of work, materials, construction stage, number of workers, and key elements visible.\n\n"
+                                    "2. QUALITY ISSUES: Examine closely for uneven finishes, improper installations, incomplete work, material defects, poor workmanship, or anything that does not meet standard construction quality. Construction sites almost always have something worth noting — look carefully.\n\n"
+                                    "3. SAFETY ISSUES: Look for missing or improper PPE, fall hazards, exposed electrical, unstable structures, cluttered walkways, improper tool use, or any condition that poses risk. Even partial or potential hazards count.\n\n"
+                                    "Be specific and direct. Do not repeat points across sections. Do not use vague filler phrases."
                                 ),
                             },
                             {"type": "image_url", "image_url": {"url": vision_url}},
@@ -129,7 +130,7 @@ async def analyze_image_url(
                     }
                 ],
                 "max_tokens": 700,
-                "temperature": 0.35,
+                "temperature": 0.5,
                 "top_p": 0.9,
                 "stream": False,
             },
