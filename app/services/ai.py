@@ -120,8 +120,8 @@ async def analyze_image_url(
                                     "You are an experienced construction site safety and quality inspector. Analyze this image thoroughly.\n\n"
                                     "Provide a report with exactly three sections:\n\n"
                                     "1. SCENE: Describe the type of work, materials, construction stage, number of workers, and key elements visible.\n\n"
-                                    "2. QUALITY ISSUES: Examine closely for uneven finishes, improper installations, incomplete work, material defects, poor workmanship, or anything that does not meet standard construction quality. Construction sites almost always have something worth noting — look carefully.\n\n"
-                                    "3. SAFETY ISSUES: Look for missing or improper PPE, fall hazards, exposed electrical, unstable structures, cluttered walkways, improper tool use, or any condition that poses risk. Even partial or potential hazards count.\n\n"
+                                    "2. QUALITY ISSUES: Examine closely for anything that does not meet standard construction quality. Construction sites almost always have something worth noting  look carefully.\n\n"
+                                    "3. SAFETY ISSUES: Look for any condition that poses risk. Even partial or potential hazards count.\n\n"
                                     "Be specific and direct. Do not repeat points across sections. Do not use vague filler phrases."
                                 ),
                             },
