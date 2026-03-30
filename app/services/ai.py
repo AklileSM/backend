@@ -94,59 +94,16 @@ async def analyze_image_url(
     file_id: str | None = None,
     db: Session | None = None,
 ) -> dict[str, Any]:
-    provider = (settings.ai_provider or "hyperbolic").strip().lower()
+    if not (settings.hyperbolic_api_key or "").strip():
+        raise ValueError(
+            "HYPERBOLIC_API_KEY is not set. Add it to backend .env (see .env.example)."
+        )
 
     async with httpx.AsyncClient(timeout=120) as client:
         vision_url, cache_key = await _resolve_vision_url(client, db, image_url, file_id)
 
         if cache_key in _cache:
             return {"description": _cache[cache_key], "cached": True}
-
-        if provider == "ollama":
-            # Ensure we have a base64-encoded image for Ollama
-            if vision_url.startswith("data:"):
-                comma = vision_url.find(",")
-                img_b64 = vision_url[comma + 1 :] if comma != -1 else vision_url
-            else:
-                r = await client.get(vision_url, follow_redirects=True)
-                r.raise_for_status()
-                img_b64 = base64.standard_b64encode(r.content).decode("ascii")
-
-            url = settings.ollama_api_base.rstrip("/") + "/api/generate"
-            response = await client.post(
-                url,
-                headers={"Content-Type": "application/json"},
-                json={
-                    "model": settings.ollama_model,
-                    "prompt": (
-                        "Describe what is in this construction image. "
-                        "Also identify quality issues and safety issues."
-                    ),
-                    "images": [img_b64],
-                    "stream": False,
-                },
-            )
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                snippet = (e.response.text or "")[:800]
-                raise RuntimeError(
-                    f"Ollama HTTP {e.response.status_code}: {snippet or e.response.reason_phrase}"
-                ) from e
-
-            payload = response.json()
-            description = (payload.get("response") or "").strip()
-            if not description:
-                raise RuntimeError("Ollama returned an empty description")
-
-            _cache[cache_key] = description
-            return {"description": description, "cached": False}
-
-        # Default: Hyperbolic
-        if not (settings.hyperbolic_api_key or "").strip():
-            raise ValueError(
-                "HYPERBOLIC_API_KEY is not set. Add it to backend .env (see .env.example)."
-            )
 
         headers: dict[str, str] = {
             "Content-Type": "application/json",
