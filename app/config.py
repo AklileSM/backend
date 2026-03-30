@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     vision_api_key: str = ""
     vision_api_url: str = "http://192.168.50.103:11434/v1/chat/completions"
-    vision_model: str = "llama3.2-vision:latest"
+    vision_model: str = "qwen3-vl:8b"
 
     @field_validator("vision_api_key", mode="before")
     @classmethod
