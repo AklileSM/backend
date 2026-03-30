@@ -37,6 +37,14 @@ class Settings(BaseSettings):
 
     hyperbolic_model: str = "Qwen/Qwen2.5-VL-72B-Instruct"
 
+    # AI provider: 'hyperbolic' or 'ollama'
+    ai_provider: str = "hyperbolic"
+    # Ollama base URL (no trailing slash), e.g. http://192.168.50.103:11434
+    ollama_api_base: str = "http://localhost:11434"
+    # Ollama model name, e.g. qwen3-vl:8b
+    ollama_model: str = "qwen3-vl:8b"
+
+
     @field_validator("hyperbolic_api_key", mode="before")
     @classmethod
     def strip_hyperbolic_api_key(cls, v: object) -> object:
