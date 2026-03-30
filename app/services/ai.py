@@ -1,3 +1,4 @@
+import json
 import base64
 import ipaddress
 import mimetypes
@@ -151,16 +152,52 @@ async def analyze_image_url(
 
         msg = choices[0].get("message") or {}
         content = msg.get("content")
-        if isinstance(content, list):
-            parts = [p.get("text", "") for p in content if isinstance(p, dict)]
-            description = "".join(parts).strip()
-        elif isinstance(content, str):
+        description: str
+
+        # Handle a few common OpenAI-compat shapes:
+        # - content is a string
+        # - content is a list of parts (dicts and/or strings)
+        # - some providers put the final text directly under choices[0].text
+        if isinstance(content, str):
             description = content.strip()
+        elif isinstance(content, list):
+            parts: list[str] = []
+            for p in content:
+                if isinstance(p, str):
+                    parts.append(p)
+                elif isinstance(p, dict):
+                    # OpenAI-style: {"type":"text","text":"..."}
+                    if isinstance(p.get("text"), str):
+                        parts.append(p["text"])
+                    # Occasionally: {"type":"text","content":"..."}
+                    elif isinstance(p.get("content"), str):
+                        parts.append(p["content"])
+                    else:
+                        # Fall back to stringification for unknown dict shapes
+                        parts.append(str(p))
+                else:
+                    parts.append(str(p))
+            description = "".join(parts).strip()
+        elif isinstance(content, dict):
+            # Rare, but keep it tolerant
+            if isinstance(content.get("text"), str):
+                description = content["text"].strip()
+            elif isinstance(content.get("content"), str):
+                description = content["content"].strip()
+            else:
+                raise RuntimeError(f"Unexpected message content dict keys: {list(content.keys())!r}"[:500])
         else:
-            raise RuntimeError(f"Unexpected message content shape: {type(content)}")
+            # Non-chat completion adapters sometimes use choices[0].text
+            alt_text = choices[0].get("text")
+            if isinstance(alt_text, str):
+                description = alt_text.strip()
+            else:
+                raise RuntimeError(f"Unexpected message content shape: {type(content)}")
 
         if not description:
-            raise RuntimeError("AI provider returned an empty description")
+            # Include a small provider payload snippet for faster debugging.
+            payload_snippet = json.dumps(payload, ensure_ascii=False)[:1200]
+            raise RuntimeError(f"AI provider returned an empty description. payload_snippet={payload_snippet}")
 
         _cache[cache_key] = description
         return {"description": description, "cached": False}
