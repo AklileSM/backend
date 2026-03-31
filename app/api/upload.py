@@ -5,7 +5,7 @@ import uuid
 from datetime import date
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_user_can_upload
@@ -21,6 +21,62 @@ settings = get_settings()
 
 _ALLOWED_MEDIA = frozenset({"image", "video", "pointcloud", "pdf"})
 _POINTCLOUD_CHUNK = 8 * 1024 * 1024  # 8 MB read chunks for streaming
+
+_CANONICAL_EXTENSION: dict[str, str] = {
+    "image": ".jpg",
+    "video": ".mp4",
+    "pointcloud": ".laz",
+    "pdf": ".pdf",
+}
+
+
+def _ext_from_content_type(content_type: str, fallback: str) -> str:
+    """Derive a clean extension from MIME type, falling back to the provided value."""
+    ct = content_type.lower()
+    if "jpeg" in ct or "jpg" in ct:
+        return ".jpg"
+    if "png" in ct:
+        return ".png"
+    if "webp" in ct:
+        return ".webp"
+    if "gif" in ct:
+        return ".gif"
+    if "mp4" in ct:
+        return ".mp4"
+    if "quicktime" in ct:
+        return ".mov"
+    if "pdf" in ct:
+        return ".pdf"
+    if "octet-stream" in ct or not ct:
+        return fallback
+    guessed = mimetypes.guess_extension(ct)
+    return guessed if guessed else fallback
+
+
+def _generate_display_name(
+    *,
+    room: "Room",
+    capture_date: date,
+    media_type: str,
+    content_type: str,
+    original_filename: str,
+    db: "Session",
+) -> str:
+    """Return a name like ``2026-03-29_room3_001.jpg``."""
+    orig_ext = os.path.splitext(original_filename)[1]
+    canonical_fallback = _CANONICAL_EXTENSION.get(media_type, ".bin")
+    ext = _ext_from_content_type(content_type, orig_ext or canonical_fallback)
+
+    # Count existing assets for this room + date so the sequence is always correct.
+    seq: int = db.scalar(
+        select(func.count()).where(
+            FileAsset.room_id == room.id,
+            FileAsset.capture_date == capture_date,
+        )
+    ) or 0
+    seq += 1
+
+    return f"{capture_date.isoformat()}_{room.slug}_{seq:03d}{ext}"
 
 
 def _bucket_for_media_type(media_type: str) -> str:
@@ -107,12 +163,21 @@ async def upload_single(
             content_type="image/jpeg",
         )
 
+    display_name = _generate_display_name(
+        room=room,
+        capture_date=capture_date,
+        media_type=media_type,
+        content_type=content_type,
+        original_filename=file.filename or "",
+        db=db,
+    )
+
     asset = FileAsset(
         room_id=room.id,
         media_type=media_type,
         capture_date=capture_date,
         original_name=file.filename or "upload",
-        display_name=file.filename or "upload",
+        display_name=display_name,
         bucket_name=bucket_name,
         object_name=object_name,
         thumbnail_bucket_name=thumbnail_bucket_name,
@@ -179,12 +244,21 @@ async def _upload_pointcloud(
         os.unlink(tmp_path)
         raise
 
+    pc_display_name = _generate_display_name(
+        room=room,
+        capture_date=capture_date,
+        media_type="pointcloud",
+        content_type=content_type,
+        original_filename=file.filename or "",
+        db=db,
+    )
+
     asset = FileAsset(
         room_id=room.id,
         media_type="pointcloud",
         capture_date=capture_date,
         original_name=file.filename or "upload",
-        display_name=file.filename or "upload",
+        display_name=pc_display_name,
         bucket_name=bucket_name,
         object_name=object_name,
         content_type=content_type,
