@@ -5,23 +5,22 @@ What it measures
 ----------------
   latency     — wall-clock ms per call (per run and aggregated)
   structure   — are all three expected sections present in every response?
-  rouge_ref   — ROUGE-L F1 of each response vs the static ground-truth description
+  rouge_ref   — ROUGE-L F1 vs a reference description (only when eval set has one)
   consistency — ROUGE-L F1 between pairs of runs for the same image
                 (higher = model gives similar answers every time)
 
 Usage
 -----
-  # run from the backend root (so app.* imports work)
-  python scripts/benchmark_vision.py
+  # Auto-discover all panorama images on disk (recommended when no eval set matches)
+  python scripts/benchmark_vision.py --image-dir ~/a6-stern/frontend/public/Images --discover
 
-  # custom options
+  # Use a prepared eval set with reference descriptions
   python scripts/benchmark_vision.py \\
-      --runs 5 \\
-      --ollama-url http://192.168.50.103:11434/v1/chat/completions \\
-      --model qwen3-vl:8b \\
-      --bucket construction-images \\
-      --eval-set scripts/eval_set.json \\
-      --output scripts/benchmark_results.json
+      --image-dir ~/a6-stern/frontend/public/Images \\
+      --eval-set scripts/eval_set.json
+
+  # Save full results to JSON
+  python scripts/benchmark_vision.py --image-dir ... --discover --output scripts/benchmark_results.json
 
 Dependencies (in addition to the backend venv)
 ----------------------------------------------
@@ -215,7 +214,16 @@ def main() -> None:
         help=(
             "Read images from local disk instead of MinIO. "
             "Provide the directory that contains the 'panoramas/' folder, "
-            "e.g. --image-dir ~/a6-stern/frontend/public"
+            "e.g. --image-dir ~/a6-stern/frontend/public/Images"
+        ),
+    )
+    parser.add_argument(
+        "--discover",
+        action="store_true",
+        help=(
+            "Auto-discover all *.jpg images under <image-dir>/panoramas/ "
+            "instead of using --eval-set. No reference descriptions — "
+            "only structure, consistency, and latency are measured."
         ),
     )
     parser.add_argument(
@@ -230,14 +238,33 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    eval_items: list[dict[str, str]] = json.loads(Path(args.eval_set).read_text())
-
     image_dir: Path | None = None
     if args.image_dir:
         image_dir = Path(args.image_dir).expanduser().resolve()
         if not image_dir.exists():
             print(f"ERROR: --image-dir does not exist: {image_dir}", file=sys.stderr)
             sys.exit(1)
+
+    # Build eval list ---------------------------------------------------
+    if args.discover:
+        if image_dir is None:
+            print("ERROR: --discover requires --image-dir", file=sys.stderr)
+            sys.exit(1)
+        panoramas_root = image_dir / "panoramas"
+        if not panoramas_root.exists():
+            print(f"ERROR: no 'panoramas/' folder found under {image_dir}", file=sys.stderr)
+            sys.exit(1)
+        discovered = sorted(panoramas_root.rglob("*.jpg"))
+        if not discovered:
+            print(f"ERROR: no .jpg files found under {panoramas_root}", file=sys.stderr)
+            sys.exit(1)
+        eval_items: list[dict] = [
+            {"key": str(p.relative_to(image_dir)).replace("\\", "/"), "reference": None}
+            for p in discovered
+        ]
+        print(f"Discovered {len(eval_items)} images under {panoramas_root}")
+    else:
+        eval_items = json.loads(Path(args.eval_set).read_text())
 
     image_source = str(image_dir) if image_dir else f"MinIO:{args.bucket}"
 
@@ -304,9 +331,14 @@ def main() -> None:
                 print(f"{short_key:<{col_w}}  ALL RUNS FAILED")
                 continue
 
-            rouge_refs = [rouge_l(reference, t) for t in run_texts]
-            avg_rouge_ref = statistics.mean(rouge_refs)
-            all_rouge_ref.extend(rouge_refs)
+            reference: str | None = item.get("reference")
+            if reference:
+                rouge_refs = [rouge_l(reference, t) for t in run_texts]
+                avg_rouge_ref: float | None = statistics.mean(rouge_refs)
+                all_rouge_ref.extend(rouge_refs)
+            else:
+                rouge_refs = []
+                avg_rouge_ref = None
 
             consistency_scores: list[float] = []
             for a, b in combinations(run_texts, 2):
@@ -319,10 +351,11 @@ def main() -> None:
 
             struct_label = f"{sum(run_valid)}/{len(run_valid)}"
             struct_ok = sum(run_valid) == len(run_valid)
+            rouge_col = f"{avg_rouge_ref:>8.3f}" if avg_rouge_ref is not None else "     N/A"
 
             print(
                 f"{short_key:<{col_w}}  {struct_label:>6}{'✓' if struct_ok else '✗'}  "
-                f"{avg_rouge_ref:>8.3f}  {avg_consistency:>8.3f}  {avg_ms:>7.0f}"
+                f"{rouge_col}  {avg_consistency:>8.3f}  {avg_ms:>7.0f}"
             )
 
             results.append({
@@ -332,7 +365,7 @@ def main() -> None:
                         "text": run_texts[i],
                         "latency_ms": run_latencies[i],
                         "structure_valid": run_valid[i],
-                        "rouge_l_ref": rouge_refs[i],
+                        "rouge_l_ref": rouge_refs[i] if rouge_refs else None,
                     }
                     for i in range(len(run_texts))
                 ],
