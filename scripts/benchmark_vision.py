@@ -51,7 +51,6 @@ import httpx  # noqa: E402
 from rouge_score import rouge_scorer  # noqa: E402
 
 from app.config import get_settings  # noqa: E402
-from app.services.storage import storage_service  # noqa: E402
 
 # ── constants ────────────────────────────────────────────────────────────────
 PROMPT = (
@@ -87,8 +86,23 @@ def strip_think_blocks(text: str) -> str:
     return text
 
 
-def fetch_image_as_data_url(object_name: str, bucket: str) -> str:
-    raw: bytes = storage_service.get_object_bytes(bucket, object_name)
+def fetch_image_as_data_url(object_name: str, bucket: str, image_dir: Path | None) -> str:
+    """
+    Load image bytes from disk (--image-dir) or fall back to MinIO.
+    Disk path = image_dir / object_name, e.g. /path/to/frontend/public/panoramas/…/room02.jpg
+    """
+    if image_dir is not None:
+        file_path = image_dir / object_name
+        if not file_path.exists():
+            raise FileNotFoundError(f"not found on disk: {file_path}")
+        raw = file_path.read_bytes()
+        mime = mimetypes.guess_type(object_name)[0] or "image/jpeg"
+        b64 = base64.standard_b64encode(raw).decode("ascii")
+        return f"data:{mime};base64,{b64}"
+
+    # MinIO fallback
+    from app.services.storage import storage_service  # lazy import
+    raw = storage_service.get_object_bytes(bucket, object_name)
     mime = mimetypes.guess_type(object_name)[0] or "image/jpeg"
     b64 = base64.standard_b64encode(raw).decode("ascii")
     return f"data:{mime};base64,{b64}"
@@ -193,7 +207,16 @@ def main() -> None:
     parser.add_argument(
         "--bucket",
         default=settings.minio_bucket_images,
-        help=f"MinIO bucket (default: {settings.minio_bucket_images})",
+        help=f"MinIO bucket, used only when --image-dir is not set (default: {settings.minio_bucket_images})",
+    )
+    parser.add_argument(
+        "--image-dir",
+        default=None,
+        help=(
+            "Read images from local disk instead of MinIO. "
+            "Provide the directory that contains the 'panoramas/' folder, "
+            "e.g. --image-dir ~/a6-stern/frontend/public"
+        ),
     )
     parser.add_argument(
         "--eval-set",
@@ -209,6 +232,15 @@ def main() -> None:
 
     eval_items: list[dict[str, str]] = json.loads(Path(args.eval_set).read_text())
 
+    image_dir: Path | None = None
+    if args.image_dir:
+        image_dir = Path(args.image_dir).expanduser().resolve()
+        if not image_dir.exists():
+            print(f"ERROR: --image-dir does not exist: {image_dir}", file=sys.stderr)
+            sys.exit(1)
+
+    image_source = str(image_dir) if image_dir else f"MinIO:{args.bucket}"
+
     print(f"\n{'='*65}")
     print(f"  VISION BENCHMARK")
     print(f"{'='*65}")
@@ -216,7 +248,7 @@ def main() -> None:
     print(f"  Ollama   : {args.ollama_url}")
     print(f"  Runs/img : {args.runs}")
     print(f"  Images   : {len(eval_items)}")
-    print(f"  Bucket   : {args.bucket}")
+    print(f"  Source   : {image_source}")
     print(f"{'='*65}\n")
 
     all_latencies: list[float] = []
@@ -242,7 +274,7 @@ def main() -> None:
 
             # Fetch image once, reuse across all runs
             try:
-                data_url = fetch_image_as_data_url(key, args.bucket)
+                data_url = fetch_image_as_data_url(key, args.bucket, image_dir)
             except Exception as exc:
                 print(f"{short_key:<{col_w}}  SKIP (image fetch failed: {exc})")
                 continue
