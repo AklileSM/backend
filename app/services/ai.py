@@ -117,11 +117,12 @@ async def analyze_image_url(
                             {
                                 "type": "text",
                                 "text": (
-                                    "You are a construction site inspector. Look at this image and write a detailed report with three sections:\n\n"
+                                    "You are a construction site inspector. This is a 360-degree panoramic image — straight walls and flat surfaces may appear curved or distorted due to the wide-angle lens. Do not describe lens distortion as curved architecture.\n\n"
+                                    "Look at this image and write a detailed report with three sections:\n\n"
                                     "SCENE: Describe what you see — the space, ongoing work, materials, workers, and overall condition.\n\n"
                                     "QUALITY ISSUES: Describe any quality or workmanship concerns in detail. Explain what is wrong and where.\n\n"
                                     "SAFETY ISSUES: Describe any safety concerns in detail. Explain the hazard and its location or cause.\n\n"
-                                    "Write up to 3 sentences per section. Do not repeat points across sections."
+                                    "Write at least 3-5 sentences per section. Do not repeat points across sections."
                                 ),
                             },
                             {"type": "image_url", "image_url": {"url": vision_url}},
