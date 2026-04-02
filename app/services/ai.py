@@ -117,7 +117,7 @@ async def analyze_image_url(
                             {
                                 "type": "text",
                                 "text": (
-                                    "You are a construction site inspector. This is a 360-degree panoramic image — straight walls and flat surfaces may appear curved or distorted due to the wide-angle lens. Do not describe lens distortion as curved architecture.\n\n"
+                                    "You are a construction site inspector. This is a 360-degree panoramic image captured with a wide-angle lens. All walls, floors, and ceilings in this building are straight and flat — any curvature you see is purely lens distortion from the panoramic projection, not actual curved architecture. Never describe walls or surfaces as curved. Treat all surfaces as straight.\n\n"
                                     "Look at this image and write a detailed report with three sections:\n\n"
                                     "SCENE: Describe what you see — the space, ongoing work, materials, workers, and overall condition.\n\n"
                                     "QUALITY ISSUES: Describe any quality or workmanship concerns in detail. Explain what is wrong and where.\n\n"
