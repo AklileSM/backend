@@ -58,7 +58,7 @@ PROMPT = (
     "SCENE: Describe what you see — the space, ongoing work, materials, workers, and overall condition.\n\n"
     "QUALITY ISSUES: Describe any quality or workmanship concerns in detail. Explain what is wrong and where.\n\n"
     "SAFETY ISSUES: Describe any safety concerns in detail. Explain the hazard and its location or cause.\n\n"
-    "Write at least 3-5 sentences per section. Do not repeat points across sections."
+    "Write at upto 3 sentences per section. Do not repeat points across sections."
 )
 
 REQUIRED_SECTIONS = ["SCENE", "QUALITY ISSUES", "SAFETY ISSUES"]
