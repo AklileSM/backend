@@ -66,6 +66,31 @@ class StorageService:
         """Return a streaming MinIO response. Caller must close it."""
         return self.client.get_object(bucket_name, object_name)
 
+    def stat_object_size(self, bucket_name: str, object_name: str) -> int:
+        st = self.client.stat_object(bucket_name, object_name)
+        return int(st.size)
+
+    def get_object_range_bytes(
+        self,
+        bucket_name: str,
+        object_name: str,
+        start: int,
+        end_inclusive: int,
+    ) -> bytes:
+        """Read only [start, end_inclusive] from object (S3 Range), without loading the whole file."""
+        length = end_inclusive - start + 1
+        response = self.client.get_object(
+            bucket_name,
+            object_name,
+            offset=start,
+            length=length,
+        )
+        try:
+            return response.read()
+        finally:
+            response.close()
+            response.release_conn()
+
     def get_presigned_url(self, bucket_name: str, object_name: str) -> str:
         return self.client.presigned_get_object(
             bucket_name,

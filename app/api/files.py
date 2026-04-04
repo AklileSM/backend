@@ -1,4 +1,5 @@
 import logging
+import re
 from collections import defaultdict
 from datetime import date
 
@@ -27,6 +28,51 @@ from app.services.storage import storage_service
 router = APIRouter()
 
 _POTREE_FILES = frozenset({"metadata.json", "hierarchy.bin", "octree.bin"})
+
+
+def _parse_http_range(range_header: str | None, total: int) -> tuple[int, int] | None:
+    """
+    Parse a single Range: bytes=… header. Returns (first, last) inclusive for a 206
+    partial response, or None to serve the full object (200).
+
+    Supports bytes=a-b, bytes=a-, and suffix bytes=-b. Multiple ranges are not
+    supported (first spec wins); malformed headers yield None (full file).
+    """
+    if not range_header or total <= 0:
+        return None
+    m = re.match(r"^\s*bytes\s*=\s*(\S+)\s*$", range_header, re.I)
+    if not m:
+        return None
+    spec = m.group(1).split(",", 1)[0].strip()
+    if "-" not in spec:
+        return None
+    left, right = spec.split("-", 1)
+    try:
+        if left == "":
+            # suffix: last N bytes
+            suffix_len = int(right)
+            if suffix_len <= 0:
+                return None
+            first = max(0, total - suffix_len)
+            last = total - 1
+            return (first, last)
+        first = int(left)
+        if right == "":
+            last = total - 1
+        else:
+            last = int(right)
+    except ValueError:
+        return None
+    if first < 0 or first > last:
+        return None
+    if first >= total:
+        raise HTTPException(
+            status_code=416,
+            detail="Range not satisfiable",
+            headers={"Content-Range": f"bytes */{total}"},
+        )
+    last = min(last, total - 1)
+    return (first, last)
 
 
 def _media_key(media_type: str) -> str:
@@ -268,43 +314,52 @@ def proxy_pointcloud_file(
         raise HTTPException(status_code=404, detail="Not found")
 
     object_name = base_object + filename
+    content_type = "application/json" if filename.endswith(".json") else "application/octet-stream"
+
     try:
-        response = storage_service.stream_object(asset.bucket_name, object_name)
-        data = response.read()
+        total = storage_service.stat_object_size(asset.bucket_name, object_name)
     except Exception:
         raise HTTPException(status_code=404, detail="File not found in storage")
-    finally:
-        try:
-            response.close()
-            response.release_conn()
-        except Exception:
-            pass
-
-    content_type = "application/json" if filename.endswith(".json") else "application/octet-stream"
-    total = len(data)
 
     range_header = request.headers.get("range")
     logger.debug("pointcloud proxy: %s total=%d range=%s", filename, total, range_header)
-    if range_header:
-        import re
-        m = re.match(r"bytes=(\d+)-(\d+)", range_header.strip())
-        if m:
-            first = int(m.group(1))
-            last = min(int(m.group(2)), total - 1)
-            chunk = data[first : last + 1]
-            return PlainResponse(
-                content=chunk,
-                status_code=206,
-                media_type=content_type,
-                headers={
-                    "Content-Range": f"bytes {first}-{last}/{total}",
-                    "Content-Length": str(len(chunk)),
-                    "Accept-Ranges": "bytes",
-                },
+
+    try:
+        parsed = _parse_http_range(range_header, total)
+    except HTTPException:
+        raise
+
+    if parsed is not None:
+        first, last = parsed
+        try:
+            chunk = storage_service.get_object_range_bytes(
+                asset.bucket_name, object_name, first, last
             )
+        except Exception:
+            raise HTTPException(status_code=404, detail="File not found in storage")
+        return PlainResponse(
+            content=chunk,
+            status_code=206,
+            media_type=content_type,
+            headers={
+                "Content-Range": f"bytes {first}-{last}/{total}",
+                "Content-Length": str(len(chunk)),
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "public, max-age=86400",
+            },
+        )
+
+    try:
+        data = storage_service.get_object_bytes(asset.bucket_name, object_name)
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not found in storage")
 
     return PlainResponse(
         content=data,
         media_type=content_type,
-        headers={"Accept-Ranges": "bytes", "Content-Length": str(total)},
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(len(data)),
+            "Cache-Control": "public, max-age=86400",
+        },
     )
