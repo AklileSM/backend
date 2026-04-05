@@ -276,7 +276,7 @@ def get_file_url(file_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
     return {"url": f"/api/files/{asset.id}/content"}
 
 
-@router.get("/{asset_id}/thumbnail")
+@router.get("/{asset_id}/thumbnail", response_model=None)
 def proxy_file_thumbnail(asset_id: str, db: Session = Depends(get_db)) -> PlainResponse:
     asset = db.scalar(select(FileAsset).where(FileAsset.id == asset_id))
     if asset is None or not (asset.thumbnail_bucket_name and asset.thumbnail_object_name):
@@ -296,8 +296,8 @@ def proxy_file_thumbnail(asset_id: str, db: Session = Depends(get_db)) -> PlainR
     )
 
 
-@router.get("/{asset_id}/content")
-def proxy_file_content(asset_id: str, request: Request, db: Session = Depends(get_db)) -> PlainResponse | StreamingResponse:
+@router.get("/{asset_id}/content", response_model=None)
+def proxy_file_content(asset_id: str, request: Request, db: Session = Depends(get_db)):
     asset = db.scalar(select(FileAsset).where(FileAsset.id == asset_id))
     if asset is None:
         raise HTTPException(status_code=404, detail="Not found")
@@ -338,6 +338,23 @@ def proxy_file_content(asset_id: str, request: Request, db: Session = Depends(ge
             },
         )
 
+    # Whole-file: prefer one buffer + Content-Length (avoids chunked + Content-Length → proxy 502).
+    _INLINE_MAX = 100 * 1024 * 1024
+    if total <= _INLINE_MAX:
+        try:
+            data = storage_service.get_object_bytes(asset.bucket_name, asset.object_name)
+        except Exception:
+            raise HTTPException(status_code=404, detail="File not found in storage")
+        return PlainResponse(
+            content=data,
+            media_type=media_type,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(len(data)),
+                "Cache-Control": "public, max-age=86400",
+            },
+        )
+
     stream = storage_service.stream_object(asset.bucket_name, asset.object_name)
 
     def body():
@@ -353,7 +370,6 @@ def proxy_file_content(asset_id: str, request: Request, db: Session = Depends(ge
         media_type=media_type,
         headers={
             "Accept-Ranges": "bytes",
-            "Content-Length": str(total),
             "Cache-Control": "public, max-age=86400",
         },
     )
