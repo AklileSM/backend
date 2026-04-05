@@ -1,4 +1,5 @@
 import logging
+import mimetypes
 import re
 from collections import defaultdict
 from datetime import date
@@ -85,6 +86,13 @@ def _media_key(media_type: str) -> str:
     return "images"
 
 
+def _content_type_for_asset(asset: FileAsset) -> str:
+    if asset.content_type:
+        return asset.content_type
+    guessed, _ = mimetypes.guess_type(asset.display_name)
+    return guessed or "application/octet-stream"
+
+
 def _serialize_asset(asset: FileAsset) -> MediaFileResponse:
     meta = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
     conversion_status = meta.get("conversion_status") if asset.media_type == "pointcloud" else None
@@ -95,12 +103,12 @@ def _serialize_asset(asset: FileAsset) -> MediaFileResponse:
         full_src = f"/api/files/{asset.id}/pointcloud/metadata.json"
         src = full_src
     else:
-        full_src = storage_service.get_presigned_url(asset.bucket_name, asset.object_name)
+        # Same-origin URLs via backend proxy so browsers never call private MinIO IPs
+        # (required for HTTPS + public deployments; presigned URLs embed LAN endpoints).
+        full_src = f"/api/files/{asset.id}/content"
         src = full_src
         if asset.thumbnail_bucket_name and asset.thumbnail_object_name:
-            src = storage_service.get_presigned_url(
-                asset.thumbnail_bucket_name, asset.thumbnail_object_name
-            )
+            src = f"/api/files/{asset.id}/thumbnail"
 
     uploaded_by = meta.get("uploaded_by_user_id")
     uploaded_by_str = str(uploaded_by) if uploaded_by is not None else None
@@ -134,12 +142,10 @@ def _serialize_my_upload(asset: FileAsset, room: Room) -> MyUploadItemResponse:
         full_src = f"/api/files/{asset.id}/pointcloud/metadata.json"
         src = full_src
     else:
-        full_src = storage_service.get_presigned_url(asset.bucket_name, asset.object_name)
+        full_src = f"/api/files/{asset.id}/content"
         src = full_src
         if asset.thumbnail_bucket_name and asset.thumbnail_object_name:
-            src = storage_service.get_presigned_url(
-                asset.thumbnail_bucket_name, asset.thumbnail_object_name
-            )
+            src = f"/api/files/{asset.id}/thumbnail"
 
     return MyUploadItemResponse(
         id=asset.id,
@@ -263,7 +269,94 @@ def get_file_url(file_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
     asset = db.scalar(select(FileAsset).where(FileAsset.id == file_id))
     if asset is None:
         raise HTTPException(status_code=404, detail="File not found")
-    return {"url": storage_service.get_presigned_url(asset.bucket_name, asset.object_name)}
+    meta = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    conversion_status = meta.get("conversion_status") if asset.media_type == "pointcloud" else None
+    if asset.media_type == "pointcloud" and conversion_status == "ready":
+        return {"url": f"/api/files/{asset.id}/pointcloud/metadata.json"}
+    return {"url": f"/api/files/{asset.id}/content"}
+
+
+@router.get("/{asset_id}/thumbnail")
+def proxy_file_thumbnail(asset_id: str, db: Session = Depends(get_db)) -> PlainResponse:
+    asset = db.scalar(select(FileAsset).where(FileAsset.id == asset_id))
+    if asset is None or not (asset.thumbnail_bucket_name and asset.thumbnail_object_name):
+        raise HTTPException(status_code=404, detail="Not found")
+    media_type = "image/jpeg"
+    try:
+        data = storage_service.get_object_bytes(asset.thumbnail_bucket_name, asset.thumbnail_object_name)
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not found in storage")
+    return PlainResponse(
+        content=data,
+        media_type=media_type,
+        headers={
+            "Content-Length": str(len(data)),
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
+
+
+@router.get("/{asset_id}/content")
+def proxy_file_content(asset_id: str, request: Request, db: Session = Depends(get_db)) -> PlainResponse | StreamingResponse:
+    asset = db.scalar(select(FileAsset).where(FileAsset.id == asset_id))
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if asset.media_type == "pointcloud":
+        meta = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+        if meta.get("conversion_status") == "ready":
+            raise HTTPException(status_code=404, detail="Use pointcloud routes")
+
+    media_type = _content_type_for_asset(asset)
+    try:
+        total = storage_service.stat_object_size(asset.bucket_name, asset.object_name)
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not found in storage")
+
+    range_header = request.headers.get("range")
+    try:
+        parsed = _parse_http_range(range_header, total)
+    except HTTPException:
+        raise
+
+    if parsed is not None:
+        first, last = parsed
+        try:
+            chunk = storage_service.get_object_range_bytes(
+                asset.bucket_name, asset.object_name, first, last
+            )
+        except Exception:
+            raise HTTPException(status_code=404, detail="File not found in storage")
+        return PlainResponse(
+            content=chunk,
+            status_code=206,
+            media_type=media_type,
+            headers={
+                "Content-Range": f"bytes {first}-{last}/{total}",
+                "Content-Length": str(len(chunk)),
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "public, max-age=86400",
+            },
+        )
+
+    stream = storage_service.stream_object(asset.bucket_name, asset.object_name)
+
+    def body():
+        try:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                yield chunk
+        finally:
+            stream.close()
+            stream.release_conn()
+
+    return StreamingResponse(
+        body(),
+        media_type=media_type,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(total),
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
 
 
 @router.get("/{asset_id}/conversion-status")
