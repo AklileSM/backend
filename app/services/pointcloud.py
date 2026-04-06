@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from app.config import get_settings
 from app.database import SessionLocal
 from app.models import FileAsset
 from app.services.storage import storage_service
@@ -13,6 +14,29 @@ logger = logging.getLogger(__name__)
 
 # Timeout in seconds for the conversion subprocess (10 minutes).
 _CONVERSION_TIMEOUT = 600
+
+
+def _remove_original_pointcloud_object(db, asset: FileAsset) -> None:
+    """Drop the source LAZ/LAS from object storage once Potree outputs are committed."""
+    try:
+        storage_service.remove_object_best_effort(asset.bucket_name, asset.object_name)
+    except Exception as exc:
+        logger.warning(
+            "Could not delete original point cloud object %s/%s after conversion: %s",
+            asset.bucket_name,
+            asset.object_name,
+            exc,
+        )
+        return
+    meta = dict(asset.metadata_json or {})
+    meta["original_removed_after_conversion"] = True
+    asset.metadata_json = meta
+    asset.file_size = None
+    db.commit()
+    logger.info(
+        "Removed original point cloud object after conversion (asset %s)",
+        asset.id,
+    )
 
 
 def _find_converter() -> str:
@@ -92,6 +116,9 @@ def convert_pointcloud_background(asset_id: str, laz_tmp_path: str) -> None:
             asset.metadata_json = meta
             db.commit()
             logger.info("Point cloud conversion complete for asset %s", asset_id)
+
+            if get_settings().delete_original_pointcloud_after_conversion:
+                _remove_original_pointcloud_object(db, asset)
 
     except Exception as exc:
         logger.exception("Point cloud conversion failed for asset %s", asset_id)

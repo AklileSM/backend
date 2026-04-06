@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     cors_extra_origins: str = ""
     presigned_url_expiry_seconds: int = 604800
     max_upload_size_bytes: int = 5368709120  # 5 GB — large enough for LAZ point clouds
+    #: After Potree conversion succeeds, delete the uploaded LAZ/LAS from MinIO (viewer uses _potree/ only).
+    #: Set DELETE_ORIGINAL_POINTCLOUD_AFTER_CONVERSION=false to keep originals for re-convert / archive.
+    delete_original_pointcloud_after_conversion: bool = True
     thumbnail_width: int = 400
     thumbnail_height: int = 300
     thumbnail_quality: int = 82

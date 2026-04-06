@@ -258,7 +258,14 @@ def delete_file_asset(
 
     if asset.thumbnail_bucket_name and asset.thumbnail_object_name:
         storage_service.remove_object_best_effort(asset.thumbnail_bucket_name, asset.thumbnail_object_name)
-    storage_service.remove_object_best_effort(asset.bucket_name, asset.object_name)
+    if asset.media_type == "pointcloud":
+        storage_service.remove_pointcloud_asset_best_effort(
+            asset.bucket_name,
+            asset.object_name,
+            asset.metadata_json,
+        )
+    else:
+        storage_service.remove_object_best_effort(asset.bucket_name, asset.object_name)
 
     db.delete(asset)
     db.commit()

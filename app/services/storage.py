@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta
 from io import BytesIO
 
@@ -8,6 +9,10 @@ from PIL import Image
 from app.config import get_settings
 
 settings = get_settings()
+
+logger = logging.getLogger(__name__)
+
+_POTREE_SUFFIXES = ("metadata.json", "hierarchy.bin", "octree.bin")
 
 
 class StorageService:
@@ -132,6 +137,43 @@ class StorageService:
             if code in ("NoSuchKey", "ResourceNotFound"):
                 return
             raise
+
+    def remove_pointcloud_asset_best_effort(
+        self,
+        bucket_name: str,
+        object_name: str,
+        metadata_json: dict | None,
+    ) -> None:
+        """
+        Remove a point-cloud upload: Potree outputs live under ``{stem}_potree/`` beside
+        the original LAS/LAZ key. Listing may fail in edge cases; we always try the three
+        known converter outputs as a fallback.
+        """
+        meta = metadata_json if isinstance(metadata_json, dict) else {}
+        base = meta.get("potree_base_object")
+        if not isinstance(base, str) or not base.strip():
+            base = object_name.rsplit(".", 1)[0] + "_potree/"
+        else:
+            base = base.strip()
+        if not base.endswith("/"):
+            base = base + "/"
+
+        try:
+            for obj in self.client.list_objects(bucket_name, prefix=base, recursive=True):
+                on = getattr(obj, "object_name", None)
+                if on:
+                    self.remove_object_best_effort(bucket_name, on)
+        except S3Error as e:
+            logger.warning(
+                "list_objects failed for pointcloud cleanup bucket=%s prefix=%s: %s",
+                bucket_name,
+                base,
+                e,
+            )
+            for suffix in _POTREE_SUFFIXES:
+                self.remove_object_best_effort(bucket_name, base + suffix)
+
+        self.remove_object_best_effort(bucket_name, object_name)
 
 
 storage_service = StorageService()
