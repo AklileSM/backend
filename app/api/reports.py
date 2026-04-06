@@ -2,7 +2,8 @@ import json
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import Response as PlainResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -17,10 +18,49 @@ router = APIRouter()
 settings = get_settings()
 
 
+def _parse_http_range(range_header: str | None, total: int) -> tuple[int, int] | None:
+    if not range_header or total <= 0:
+        return None
+    if "=" not in range_header:
+        return None
+    unit, raw_spec = range_header.split("=", 1)
+    if unit.strip().lower() != "bytes":
+        return None
+    spec = raw_spec.split(",", 1)[0].strip()
+    if "-" not in spec:
+        return None
+    left, right = spec.split("-", 1)
+    try:
+        if left == "":
+            suffix_len = int(right)
+            if suffix_len <= 0:
+                return None
+            first = max(0, total - suffix_len)
+            last = total - 1
+            return (first, last)
+        first = int(left)
+        if right == "":
+            last = total - 1
+        else:
+            last = int(right)
+    except ValueError:
+        return None
+    if first < 0 or first > last:
+        return None
+    if first >= total:
+        raise HTTPException(
+            status_code=416,
+            detail="Range not satisfiable",
+            headers={"Content-Range": f"bytes */{total}"},
+        )
+    return (first, min(last, total - 1))
+
+
 def _report_to_response(report: Report) -> ReportResponse:
     pdf_url = None
     if report.pdf_bucket_name and report.pdf_object_name:
-        pdf_url = storage_service.get_presigned_url(report.pdf_bucket_name, report.pdf_object_name)
+        # Use same-origin proxy URL so browser access works in public/proxied deployments.
+        pdf_url = f"/api/reports/{report.id}/pdf"
     return ReportResponse(
         id=report.id,
         file_id=report.file_id,
@@ -57,6 +97,89 @@ def list_reports(
         .order_by(Report.created_at.desc())
     ).all()
     return [_report_to_response(r) for r in reports]
+
+
+@router.get("/{report_id}/pdf", response_model=None)
+def get_report_pdf(
+    report_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    report = db.scalar(select(Report).where(Report.id == report_id))
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if report.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed to access this report")
+    if not report.pdf_bucket_name or not report.pdf_object_name:
+        raise HTTPException(status_code=404, detail="Report PDF not available")
+
+    try:
+        total = storage_service.stat_object_size(report.pdf_bucket_name, report.pdf_object_name)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Report PDF not found in storage")
+
+    range_header = request.headers.get("range")
+    parsed = _parse_http_range(range_header, total)
+    media_type = "application/pdf"
+
+    if parsed is not None:
+        first, last = parsed
+        try:
+            chunk = storage_service.get_object_range_bytes(
+                report.pdf_bucket_name,
+                report.pdf_object_name,
+                first,
+                last,
+            )
+        except Exception:
+            raise HTTPException(status_code=404, detail="Report PDF not found in storage")
+        return PlainResponse(
+            content=chunk,
+            status_code=206,
+            media_type=media_type,
+            headers={
+                "Content-Range": f"bytes {first}-{last}/{total}",
+                "Content-Length": str(len(chunk)),
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "private, max-age=300",
+            },
+        )
+
+    _INLINE_MAX = 100 * 1024 * 1024
+    if total <= _INLINE_MAX:
+        try:
+            data = storage_service.get_object_bytes(report.pdf_bucket_name, report.pdf_object_name)
+        except Exception:
+            raise HTTPException(status_code=404, detail="Report PDF not found in storage")
+        return PlainResponse(
+            content=data,
+            media_type=media_type,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(len(data)),
+                "Cache-Control": "private, max-age=300",
+            },
+        )
+
+    stream = storage_service.stream_object(report.pdf_bucket_name, report.pdf_object_name)
+
+    def body():
+        try:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                yield chunk
+        finally:
+            stream.close()
+            stream.release_conn()
+
+    return StreamingResponse(
+        body(),
+        media_type=media_type,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, max-age=300",
+        },
+    )
 
 
 @router.post("/", response_model=ReportResponse)
