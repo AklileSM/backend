@@ -21,7 +21,7 @@ router = APIRouter()
 settings = get_settings()
 
 _ALLOWED_MEDIA = frozenset({"image", "video", "pointcloud", "pdf"})
-_POINTCLOUD_CHUNK = 8 * 1024 * 1024  # 8 MB read chunks for streaming
+_POINTCLOUD_CHUNK = 32 * 1024 * 1024  # 32 MB chunks to reduce request overhead on large uploads
 _POINTCLOUD_UPLOAD_DIR = Path(tempfile.gettempdir()) / "a6_pointcloud_uploads"
 
 _CANONICAL_EXTENSION: dict[str, str] = {
