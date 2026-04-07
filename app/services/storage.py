@@ -1,6 +1,7 @@
 import logging
 from datetime import timedelta
 from io import BytesIO
+from urllib.parse import urlparse, urlunparse
 
 from minio import Minio
 from minio.error import S3Error
@@ -102,6 +103,26 @@ class StorageService:
             object_name,
             expires=timedelta(seconds=settings.presigned_url_expiry_seconds),
         )
+
+    def get_presigned_put_url(self, bucket_name: str, object_name: str) -> str:
+        raw = self.client.get_presigned_url(
+            method="PUT",
+            bucket_name=bucket_name,
+            object_name=object_name,
+            expires=timedelta(seconds=settings.presigned_url_expiry_seconds),
+        )
+        public_base = (settings.minio_public_upload_base_url or "").strip()
+        if not public_base:
+            return raw
+        try:
+            src = urlparse(raw)
+            dst = urlparse(public_base if "://" in public_base else f"https://{public_base}")
+            return urlunparse((dst.scheme, dst.netloc, src.path, src.params, src.query, src.fragment))
+        except Exception:
+            return raw
+
+    def download_object_to_path(self, bucket_name: str, object_name: str, file_path: str) -> None:
+        self.client.fget_object(bucket_name, object_name, file_path)
 
     def get_object_bytes(self, bucket_name: str, object_name: str) -> bytes:
         response = self.client.get_object(bucket_name, object_name)

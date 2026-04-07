@@ -100,6 +100,16 @@ def _safe_filename(name: str) -> str:
     return base
 
 
+def _read_upload_manifest(manifest_path: Path) -> dict[str, str]:
+    meta: dict[str, str] = {}
+    for raw in manifest_path.read_text(encoding="utf-8").splitlines():
+        if "=" not in raw:
+            continue
+        k, v = raw.split("=", 1)
+        meta[k] = v
+    return meta
+
+
 def _save_pointcloud_asset_and_queue_conversion(
     *,
     db: Session,
@@ -193,6 +203,49 @@ def init_pointcloud_upload(
     return {"upload_id": upload_id, "chunk_size": _POINTCLOUD_CHUNK}
 
 
+@router.post("/pointcloud/direct-init")
+def init_pointcloud_direct_upload(
+    room_slug: str = Form(...),
+    capture_date: date = Form(...),
+    filename: str = Form(...),
+    file_size: int = Form(...),
+    content_type: str = Form("application/octet-stream"),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_user_can_upload),
+) -> dict[str, str]:
+    room = db.scalar(select(Room).where(Room.slug == room_slug))
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if file_size <= 0:
+        raise HTTPException(status_code=400, detail="Invalid file size")
+    if file_size > settings.max_upload_size_bytes:
+        raise HTTPException(status_code=413, detail="File too large")
+
+    upload_id = uuid.uuid4().hex
+    safe_name = _safe_filename(filename)
+    extension = os.path.splitext(safe_name)[1]
+    object_name = f"{room.slug}/{capture_date.isoformat()}/{uuid.uuid4().hex}{extension}"
+    bucket_name = _bucket_for_media_type("pointcloud")
+    upload_dir = _pointcloud_upload_path(upload_id)
+    upload_dir.mkdir(parents=True, exist_ok=False)
+    (upload_dir / "manifest.txt").write_text(
+        "\n".join(
+            [
+                f"room_slug={room_slug}",
+                f"capture_date={capture_date.isoformat()}",
+                f"filename={safe_name}",
+                f"file_size={file_size}",
+                f"content_type={content_type or 'application/octet-stream'}",
+                f"bucket_name={bucket_name}",
+                f"object_name={object_name}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    upload_url = storage_service.get_presigned_put_url(bucket_name, object_name)
+    return {"upload_id": upload_id, "upload_url": upload_url, "method": "PUT"}
+
+
 @router.post("/pointcloud/chunk")
 async def upload_pointcloud_chunk(
     upload_id: str = Form(...),
@@ -233,12 +286,7 @@ def complete_pointcloud_upload(
     if not upload_dir.exists() or not manifest.exists():
         raise HTTPException(status_code=404, detail="Upload session not found")
 
-    meta: dict[str, str] = {}
-    for raw in manifest.read_text(encoding="utf-8").splitlines():
-        if "=" not in raw:
-            continue
-        k, v = raw.split("=", 1)
-        meta[k] = v
+    meta = _read_upload_manifest(manifest)
 
     room_slug = meta.get("room_slug", "")
     room = db.scalar(select(Room).where(Room.slug == room_slug))
@@ -320,6 +368,79 @@ def complete_pointcloud_upload(
         current_user=current_user,
         local_path_for_conversion=assembled_path,
     )
+
+
+@router.post("/pointcloud/direct-complete", response_model=UploadResponse)
+def complete_pointcloud_direct_upload(
+    background_tasks: BackgroundTasks,
+    upload_id: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_user_can_upload),
+) -> UploadResponse:
+    upload_dir = _pointcloud_upload_path(upload_id)
+    manifest = upload_dir / "manifest.txt"
+    if not upload_dir.exists() or not manifest.exists():
+        raise HTTPException(status_code=404, detail="Upload session not found")
+
+    try:
+        meta = _read_upload_manifest(manifest)
+        room_slug = meta.get("room_slug", "")
+        room = db.scalar(select(Room).where(Room.slug == room_slug))
+        if room is None:
+            raise HTTPException(status_code=404, detail="Room not found")
+
+        capture_date_raw = meta.get("capture_date")
+        if not capture_date_raw:
+            raise HTTPException(status_code=400, detail="Missing capture_date")
+        capture_date = date.fromisoformat(capture_date_raw)
+        original_filename = _safe_filename(meta.get("filename", "upload.laz"))
+        content_type = meta.get("content_type", "application/octet-stream")
+        bucket_name = meta.get("bucket_name", _bucket_for_media_type("pointcloud"))
+        object_name = meta.get("object_name", "")
+        if not object_name:
+            raise HTTPException(status_code=400, detail="Missing uploaded object")
+
+        declared_size = int(meta.get("file_size", "0"))
+        stored_size = storage_service.stat_object_size(bucket_name, object_name)
+        if stored_size <= 0:
+            raise HTTPException(status_code=400, detail="Uploaded object is empty")
+        if declared_size > 0 and stored_size != declared_size:
+            raise HTTPException(status_code=400, detail="Uploaded size mismatch")
+
+        extension = os.path.splitext(original_filename)[1]
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=extension or ".laz")
+        os.close(tmp_fd)
+        try:
+            storage_service.download_object_to_path(bucket_name, object_name, tmp_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise HTTPException(status_code=400, detail="Failed to prepare uploaded pointcloud")
+
+        return _save_pointcloud_asset_and_queue_conversion(
+            db=db,
+            background_tasks=background_tasks,
+            room=room,
+            capture_date=capture_date,
+            original_filename=original_filename,
+            object_name=object_name,
+            bucket_name=bucket_name,
+            content_type=content_type,
+            file_size=stored_size,
+            current_user=current_user,
+            local_path_for_conversion=tmp_path,
+        )
+    finally:
+        try:
+            manifest.unlink()
+        except OSError:
+            pass
+        try:
+            upload_dir.rmdir()
+        except OSError:
+            pass
 
 
 @router.post("/single", response_model=UploadResponse)

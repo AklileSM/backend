@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     minio_bucket_pointclouds: str = "construction-pointclouds"
     minio_bucket_pdfs: str = "construction-pdfs"
     minio_bucket_reports: str = "construction-reports"
+    # Optional public URL for browser direct uploads (example: https://minio.example.com).
+    # If empty, presigned URLs use minio_server as-is.
+    minio_public_upload_base_url: str = ""
 
     vision_api_key: str = ""
     vision_api_url: str = "http://192.168.50.103:11434/v1/chat/completions"
