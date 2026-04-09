@@ -64,7 +64,7 @@ def _generate_display_name(
     original_filename: str,
     db: "Session",
 ) -> str:
-    """Return a name like ``2026-03-29_room3_001.jpg``."""
+    """Return a name like ``room3-20260329-001.jpg``."""
     orig_ext = os.path.splitext(original_filename)[1]
     canonical_fallback = _CANONICAL_EXTENSION.get(media_type, ".bin")
     ext = _ext_from_content_type(content_type, orig_ext or canonical_fallback)
@@ -78,7 +78,12 @@ def _generate_display_name(
     ) or 0
     seq += 1
 
-    return f"{capture_date.isoformat()}_{room.slug}_{seq:03d}{ext}"
+    compact_date = capture_date.strftime("%Y%m%d")
+    return f"{room.slug}-{compact_date}-{seq:03d}{ext}"
+
+
+def _build_object_name(room_slug: str, capture_date: date, display_name: str) -> str:
+    return f"{room_slug}/{capture_date.isoformat()}/{display_name}"
 
 
 def _bucket_for_media_type(media_type: str) -> str:
@@ -123,22 +128,14 @@ def _save_pointcloud_asset_and_queue_conversion(
     file_size: int,
     current_user: User,
     local_path_for_conversion: str,
+    display_name: str,
 ) -> UploadResponse:
-    pc_display_name = _generate_display_name(
-        room=room,
-        capture_date=capture_date,
-        media_type="pointcloud",
-        content_type=content_type,
-        original_filename=original_filename,
-        db=db,
-    )
-
     asset = FileAsset(
         room_id=room.id,
         media_type="pointcloud",
         capture_date=capture_date,
         original_name=original_filename or "upload",
-        display_name=pc_display_name,
+        display_name=display_name,
         bucket_name=bucket_name,
         object_name=object_name,
         content_type=content_type,
@@ -196,6 +193,7 @@ def init_pointcloud_upload(
                 f"filename={safe_name}",
                 f"file_size={file_size}",
                 f"content_type={content_type or 'application/octet-stream'}",
+                f"display_name={_generate_display_name(room=room, capture_date=capture_date, media_type='pointcloud', content_type=content_type or 'application/octet-stream', original_filename=safe_name, db=db)}",
             ]
         ),
         encoding="utf-8",
@@ -223,8 +221,15 @@ def init_pointcloud_direct_upload(
 
     upload_id = uuid.uuid4().hex
     safe_name = _safe_filename(filename)
-    extension = os.path.splitext(safe_name)[1]
-    object_name = f"{room.slug}/{capture_date.isoformat()}/{uuid.uuid4().hex}{extension}"
+    display_name = _generate_display_name(
+        room=room,
+        capture_date=capture_date,
+        media_type="pointcloud",
+        content_type=content_type or "application/octet-stream",
+        original_filename=safe_name,
+        db=db,
+    )
+    object_name = _build_object_name(room.slug, capture_date, display_name)
     bucket_name = _bucket_for_media_type("pointcloud")
     upload_dir = _pointcloud_upload_path(upload_id)
     upload_dir.mkdir(parents=True, exist_ok=False)
@@ -238,6 +243,7 @@ def init_pointcloud_direct_upload(
                 f"content_type={content_type or 'application/octet-stream'}",
                 f"bucket_name={bucket_name}",
                 f"object_name={object_name}",
+                f"display_name={display_name}",
             ]
         ),
         encoding="utf-8",
@@ -300,9 +306,17 @@ def complete_pointcloud_upload(
     original_filename = _safe_filename(meta.get("filename", "upload.laz"))
     content_type = meta.get("content_type", "application/octet-stream")
 
-    extension = os.path.splitext(original_filename)[1]
-    object_name = f"{room.slug}/{capture_date.isoformat()}/{uuid.uuid4().hex}{extension}"
+    display_name = meta.get("display_name") or _generate_display_name(
+        room=room,
+        capture_date=capture_date,
+        media_type="pointcloud",
+        content_type=content_type,
+        original_filename=original_filename,
+        db=db,
+    )
+    object_name = _build_object_name(room.slug, capture_date, display_name)
     bucket_name = _bucket_for_media_type("pointcloud")
+    extension = os.path.splitext(original_filename)[1]
 
     tmp_fd, assembled_path = tempfile.mkstemp(suffix=extension or ".laz")
     file_size = 0
@@ -367,6 +381,7 @@ def complete_pointcloud_upload(
         file_size=file_size,
         current_user=current_user,
         local_path_for_conversion=assembled_path,
+        display_name=display_name,
     )
 
 
@@ -397,6 +412,14 @@ def complete_pointcloud_direct_upload(
         content_type = meta.get("content_type", "application/octet-stream")
         bucket_name = meta.get("bucket_name", _bucket_for_media_type("pointcloud"))
         object_name = meta.get("object_name", "")
+        display_name = meta.get("display_name") or _generate_display_name(
+            room=room,
+            capture_date=capture_date,
+            media_type="pointcloud",
+            content_type=content_type,
+            original_filename=original_filename,
+            db=db,
+        )
         if not object_name:
             raise HTTPException(status_code=400, detail="Missing uploaded object")
 
@@ -431,6 +454,7 @@ def complete_pointcloud_direct_upload(
             file_size=stored_size,
             current_user=current_user,
             local_path_for_conversion=tmp_path,
+            display_name=display_name,
         )
     finally:
         try:
@@ -466,9 +490,6 @@ async def upload_single(
         if "pdf" not in ct and not fn.endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Expected a PDF file")
 
-    extension = os.path.splitext(file.filename or "")[1]
-    object_name = f"{room.slug}/{capture_date.isoformat()}/{uuid.uuid4().hex}{extension}"
-    bucket_name = _bucket_for_media_type(media_type)
     content_type = (
         file.content_type
         or mimetypes.guess_type(file.filename or "")[0]
@@ -476,6 +497,18 @@ async def upload_single(
     )
     if media_type == "pdf" and "pdf" not in content_type.lower():
         content_type = "application/pdf"
+
+    display_name = _generate_display_name(
+        room=room,
+        capture_date=capture_date,
+        media_type=media_type,
+        content_type=content_type,
+        original_filename=file.filename or "",
+        db=db,
+    )
+    object_name = _build_object_name(room.slug, capture_date, display_name)
+    bucket_name = _bucket_for_media_type(media_type)
+    extension = os.path.splitext(display_name)[1]
 
     # --- Point clouds: stream to a temp file to avoid loading GBs into RAM ---
     if media_type == "pointcloud":
@@ -518,15 +551,6 @@ async def upload_single(
             data=thumbnail,
             content_type="image/jpeg",
         )
-
-    display_name = _generate_display_name(
-        room=room,
-        capture_date=capture_date,
-        media_type=media_type,
-        content_type=content_type,
-        original_filename=file.filename or "",
-        db=db,
-    )
 
     asset = FileAsset(
         room_id=room.id,
@@ -600,21 +624,12 @@ async def _upload_pointcloud(
         os.unlink(tmp_path)
         raise
 
-    pc_display_name = _generate_display_name(
-        room=room,
-        capture_date=capture_date,
-        media_type="pointcloud",
-        content_type=content_type,
-        original_filename=file.filename or "",
-        db=db,
-    )
-
     asset = FileAsset(
         room_id=room.id,
         media_type="pointcloud",
         capture_date=capture_date,
         original_name=file.filename or "upload",
-        display_name=pc_display_name,
+        display_name=os.path.basename(object_name),
         bucket_name=bucket_name,
         object_name=object_name,
         content_type=content_type,
