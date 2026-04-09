@@ -69,11 +69,13 @@ def _generate_display_name(
     canonical_fallback = _CANONICAL_EXTENSION.get(media_type, ".bin")
     ext = _ext_from_content_type(content_type, orig_ext or canonical_fallback)
 
-    # Count existing assets for this room + date so the sequence is always correct.
+    # Count existing assets for this room + date + media_type so each media
+    # category has an independent sequence.
     seq: int = db.scalar(
         select(func.count()).where(
             FileAsset.room_id == room.id,
             FileAsset.capture_date == capture_date,
+            FileAsset.media_type == media_type,
         )
     ) or 0
     seq += 1
