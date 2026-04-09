@@ -45,6 +45,17 @@ CREATE TABLE IF NOT EXISTS reports (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS comparison_drafts (
+    id VARCHAR(36) PRIMARY KEY,
+    file_id VARCHAR(36) NOT NULL REFERENCES file_assets(id) ON DELETE CASCADE,
+    manual_observations TEXT,
+    flags JSON,
+    pdf_bucket_name VARCHAR(255) NOT NULL,
+    pdf_object_name VARCHAR(500) NOT NULL,
+    created_by VARCHAR(255),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS annotations (
     id VARCHAR(36) PRIMARY KEY,
     file_id VARCHAR(36) NOT NULL REFERENCES file_assets(id) ON DELETE CASCADE,
@@ -57,3 +68,4 @@ CREATE INDEX IF NOT EXISTS ix_rooms_slug ON rooms(slug);
 CREATE INDEX IF NOT EXISTS ix_file_assets_room_id ON file_assets(room_id);
 CREATE INDEX IF NOT EXISTS ix_file_assets_capture_date ON file_assets(capture_date);
 CREATE INDEX IF NOT EXISTS ix_file_assets_media_type ON file_assets(media_type);
+CREATE INDEX IF NOT EXISTS ix_comparison_drafts_created_by ON comparison_drafts(created_by);

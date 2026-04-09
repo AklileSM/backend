@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.config import get_settings
 from app.database import get_db
-from app.models import FileAsset, Report, User
-from app.schemas import ReportCreateRequest, ReportResponse
+from app.models import ComparisonDraft, FileAsset, Report, User
+from app.schemas import ComparisonDraftResponse, ReportCreateRequest, ReportResponse
 from app.services.storage import storage_service
 
 router = APIRouter()
@@ -74,6 +74,20 @@ def _report_to_response(report: Report) -> ReportResponse:
     )
 
 
+def _draft_to_response(draft: ComparisonDraft) -> ComparisonDraftResponse:
+    pdf_url = None
+    if draft.pdf_bucket_name and draft.pdf_object_name:
+        pdf_url = f"/api/reports/comparison-drafts/{draft.id}/pdf"
+    return ComparisonDraftResponse(
+        id=draft.id,
+        file_id=draft.file_id,
+        manual_observations=draft.manual_observations,
+        flags=draft.flags or [],
+        pdf_url=pdf_url,
+        created_at=draft.created_at,
+    )
+
+
 def _parse_flags_json(flags_json: str | None) -> list[str]:
     if flags_json is None or not str(flags_json).strip():
         return []
@@ -84,6 +98,18 @@ def _parse_flags_json(flags_json: str | None) -> list[str]:
     if not isinstance(data, list) or not all(isinstance(x, str) for x in data):
         raise HTTPException(status_code=400, detail="flags_json must be a JSON array of strings")
     return data
+
+
+def _parse_draft_ids_json(draft_ids_json: str | None) -> list[str]:
+    if draft_ids_json is None or not str(draft_ids_json).strip():
+        return []
+    try:
+        data = json.loads(draft_ids_json)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail="draft_ids_json must be a JSON array of ids") from e
+    if not isinstance(data, list) or not all(isinstance(x, str) and x.strip() for x in data):
+        raise HTTPException(status_code=400, detail="draft_ids_json must be a JSON array of ids")
+    return [x.strip() for x in data]
 
 
 @router.get("/", response_model=list[ReportResponse])
@@ -225,6 +251,215 @@ def delete_report(
 
     db.delete(report)
     db.commit()
+
+
+@router.get("/comparison-drafts", response_model=list[ComparisonDraftResponse])
+def list_comparison_drafts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ComparisonDraftResponse]:
+    drafts = db.scalars(
+        select(ComparisonDraft)
+        .where(ComparisonDraft.created_by == current_user.id)
+        .order_by(ComparisonDraft.created_at.asc())
+    ).all()
+    return [_draft_to_response(d) for d in drafts]
+
+
+@router.get("/comparison-drafts/{draft_id}/pdf", response_model=None)
+def get_comparison_draft_pdf(
+    draft_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    draft = db.scalar(select(ComparisonDraft).where(ComparisonDraft.id == draft_id))
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if draft.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed to access this draft")
+
+    try:
+        total = storage_service.stat_object_size(draft.pdf_bucket_name, draft.pdf_object_name)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Draft PDF not found in storage")
+
+    range_header = request.headers.get("range")
+    parsed = _parse_http_range(range_header, total)
+    media_type = "application/pdf"
+
+    if parsed is not None:
+        first, last = parsed
+        try:
+            chunk = storage_service.get_object_range_bytes(
+                draft.pdf_bucket_name,
+                draft.pdf_object_name,
+                first,
+                last,
+            )
+        except Exception:
+            raise HTTPException(status_code=404, detail="Draft PDF not found in storage")
+        return PlainResponse(
+            content=chunk,
+            status_code=206,
+            media_type=media_type,
+            headers={
+                "Content-Range": f"bytes {first}-{last}/{total}",
+                "Content-Length": str(len(chunk)),
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "private, max-age=300",
+            },
+        )
+
+    data = storage_service.get_object_bytes(draft.pdf_bucket_name, draft.pdf_object_name)
+    return PlainResponse(
+        content=data,
+        media_type=media_type,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(len(data)),
+            "Cache-Control": "private, max-age=300",
+        },
+    )
+
+
+@router.post("/comparison-drafts", response_model=ComparisonDraftResponse)
+async def create_comparison_draft(
+    file: UploadFile = File(...),
+    file_id: str = Form(...),
+    manual_observations: str | None = Form(None),
+    flags_json: str | None = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ComparisonDraftResponse:
+    file_asset = db.scalar(select(FileAsset).where(FileAsset.id == file_id))
+    if file_asset is None:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    raw = await file.read()
+    if len(raw) == 0:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(raw) > settings.max_upload_size_bytes:
+        raise HTTPException(status_code=413, detail="File too large")
+
+    filename = (file.filename or "").lower()
+    ct = (file.content_type or "").lower()
+    if "pdf" not in ct and not filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Expected a PDF file")
+
+    flags = _parse_flags_json(flags_json)
+    draft_id = str(uuid.uuid4())
+    bucket = settings.minio_bucket_reports
+    object_name = f"{current_user.id}/comparison-drafts/{draft_id}.pdf"
+    storage_service.upload_bytes(
+        bucket_name=bucket,
+        object_name=object_name,
+        data=raw,
+        content_type="application/pdf",
+    )
+
+    draft = ComparisonDraft(
+        id=draft_id,
+        file_id=file_id,
+        manual_observations=manual_observations,
+        flags=flags,
+        pdf_bucket_name=bucket,
+        pdf_object_name=object_name,
+        created_by=current_user.id,
+        created_at=datetime.utcnow(),
+    )
+    db.add(draft)
+    db.commit()
+    db.refresh(draft)
+    return _draft_to_response(draft)
+
+
+@router.delete("/comparison-drafts/{draft_id}", status_code=204)
+def delete_comparison_draft(
+    draft_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    draft = db.scalar(select(ComparisonDraft).where(ComparisonDraft.id == draft_id))
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if draft.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed to delete this draft")
+    storage_service.remove_object_best_effort(draft.pdf_bucket_name, draft.pdf_object_name)
+    db.delete(draft)
+    db.commit()
+
+
+@router.post("/comparison-drafts/publish", response_model=ReportResponse)
+async def publish_comparison_drafts(
+    file: UploadFile = File(...),
+    file_id: str = Form(...),
+    draft_ids_json: str | None = Form(None),
+    manual_observations: str | None = Form(None),
+    flags_json: str | None = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ReportResponse:
+    file_asset = db.scalar(select(FileAsset).where(FileAsset.id == file_id))
+    if file_asset is None:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    draft_ids = _parse_draft_ids_json(draft_ids_json)
+    if not draft_ids:
+        raise HTTPException(status_code=400, detail="No comparison drafts selected for publish")
+
+    drafts = db.scalars(
+        select(ComparisonDraft).where(
+            ComparisonDraft.created_by == current_user.id,
+            ComparisonDraft.id.in_(draft_ids),
+        )
+    ).all()
+    if len(drafts) != len(set(draft_ids)):
+        raise HTTPException(status_code=400, detail="Some comparison drafts were not found")
+
+    raw = await file.read()
+    if len(raw) == 0:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(raw) > settings.max_upload_size_bytes:
+        raise HTTPException(status_code=413, detail="File too large")
+
+    filename = (file.filename or "").lower()
+    ct = (file.content_type or "").lower()
+    if "pdf" not in ct and not filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Expected a PDF file")
+
+    flags = _parse_flags_json(flags_json)
+    report_id = str(uuid.uuid4())
+    bucket = settings.minio_bucket_reports
+    object_name = f"{current_user.id}/{report_id}.pdf"
+    storage_service.upload_bytes(
+        bucket_name=bucket,
+        object_name=object_name,
+        data=raw,
+        content_type="application/pdf",
+    )
+
+    report = Report(
+        id=report_id,
+        file_id=file_id,
+        ai_description=None,
+        manual_observations=manual_observations,
+        flags=flags,
+        screenshots=None,
+        pdf_bucket_name=bucket,
+        pdf_object_name=object_name,
+        created_by=current_user.id,
+        created_at=datetime.utcnow(),
+    )
+    db.add(report)
+
+    for draft in drafts:
+        storage_service.remove_object_best_effort(draft.pdf_bucket_name, draft.pdf_object_name)
+        db.delete(draft)
+
+    db.commit()
+    db.refresh(report)
+    return _report_to_response(report)
 
 
 @router.post("/with-pdf", response_model=ReportResponse)

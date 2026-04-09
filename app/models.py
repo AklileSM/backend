@@ -66,6 +66,24 @@ class FileAsset(Base):
     room: Mapped[Room] = relationship(back_populates="files")
     reports: Mapped[list["Report"]] = relationship(back_populates="file", cascade="all, delete-orphan")
     annotations: Mapped[list["Annotation"]] = relationship(back_populates="file", cascade="all, delete-orphan")
+    comparison_drafts: Mapped[list["ComparisonDraft"]] = relationship(
+        back_populates="file", cascade="all, delete-orphan"
+    )
+
+
+class ComparisonDraft(Base):
+    __tablename__ = "comparison_drafts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    file_id: Mapped[str] = mapped_column(ForeignKey("file_assets.id"), nullable=False)
+    manual_observations: Mapped[str | None] = mapped_column(Text, nullable=True)
+    flags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    pdf_bucket_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    pdf_object_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    file: Mapped[FileAsset] = relationship(back_populates="comparison_drafts")
 
 
 class Report(Base):

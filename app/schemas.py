@@ -111,6 +111,15 @@ class ReportResponse(BaseModel):
     created_at: datetime
 
 
+class ComparisonDraftResponse(BaseModel):
+    id: str
+    file_id: str
+    manual_observations: str | None = None
+    flags: list[str] = Field(default_factory=list)
+    pdf_url: str | None = None
+    created_at: datetime
+
+
 class AnnotationCreateRequest(BaseModel):
     file_id: str
     annotation_type: str
