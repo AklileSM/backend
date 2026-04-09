@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS comparison_drafts (
     file_id VARCHAR(36) NOT NULL REFERENCES file_assets(id) ON DELETE CASCADE,
     manual_observations TEXT,
     flags JSON,
+    state_json JSON,
     pdf_bucket_name VARCHAR(255) NOT NULL,
     pdf_object_name VARCHAR(500) NOT NULL,
     created_by VARCHAR(255),

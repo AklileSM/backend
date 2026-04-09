@@ -11,7 +11,12 @@ from app.api.deps import get_current_user
 from app.config import get_settings
 from app.database import get_db
 from app.models import ComparisonDraft, FileAsset, Report, User
-from app.schemas import ComparisonDraftResponse, ReportCreateRequest, ReportResponse
+from app.schemas import (
+    ComparisonDraftDetailResponse,
+    ComparisonDraftResponse,
+    ReportCreateRequest,
+    ReportResponse,
+)
 from app.services.storage import storage_service
 
 router = APIRouter()
@@ -88,6 +93,14 @@ def _draft_to_response(draft: ComparisonDraft) -> ComparisonDraftResponse:
     )
 
 
+def _draft_to_detail_response(draft: ComparisonDraft) -> ComparisonDraftDetailResponse:
+    base = _draft_to_response(draft)
+    return ComparisonDraftDetailResponse(
+        **base.model_dump(),
+        state_json=draft.state_json if isinstance(draft.state_json, dict) else None,
+    )
+
+
 def _parse_flags_json(flags_json: str | None) -> list[str]:
     if flags_json is None or not str(flags_json).strip():
         return []
@@ -110,6 +123,20 @@ def _parse_draft_ids_json(draft_ids_json: str | None) -> list[str]:
     if not isinstance(data, list) or not all(isinstance(x, str) and x.strip() for x in data):
         raise HTTPException(status_code=400, detail="draft_ids_json must be a JSON array of ids")
     return [x.strip() for x in data]
+
+
+def _parse_state_json(state_json: str | None) -> dict | None:
+    if state_json is None or not str(state_json).strip():
+        return None
+    try:
+        data = json.loads(state_json)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail="state_json must be a JSON object") from e
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="state_json must be a JSON object")
+    return data
 
 
 @router.get("/", response_model=list[ReportResponse])
@@ -266,6 +293,20 @@ def list_comparison_drafts(
     return [_draft_to_response(d) for d in drafts]
 
 
+@router.get("/comparison-drafts/{draft_id}", response_model=ComparisonDraftDetailResponse)
+def get_comparison_draft(
+    draft_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ComparisonDraftDetailResponse:
+    draft = db.scalar(select(ComparisonDraft).where(ComparisonDraft.id == draft_id))
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if draft.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed to access this draft")
+    return _draft_to_detail_response(draft)
+
+
 @router.get("/comparison-drafts/{draft_id}/pdf", response_model=None)
 def get_comparison_draft_pdf(
     draft_id: str,
@@ -323,15 +364,16 @@ def get_comparison_draft_pdf(
     )
 
 
-@router.post("/comparison-drafts", response_model=ComparisonDraftResponse)
+@router.post("/comparison-drafts", response_model=ComparisonDraftDetailResponse)
 async def create_comparison_draft(
     file: UploadFile = File(...),
     file_id: str = Form(...),
     manual_observations: str | None = Form(None),
     flags_json: str | None = Form(None),
+    state_json: str | None = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> ComparisonDraftResponse:
+) -> ComparisonDraftDetailResponse:
     file_asset = db.scalar(select(FileAsset).where(FileAsset.id == file_id))
     if file_asset is None:
         raise HTTPException(status_code=404, detail="File not found")
@@ -348,6 +390,7 @@ async def create_comparison_draft(
         raise HTTPException(status_code=400, detail="Expected a PDF file")
 
     flags = _parse_flags_json(flags_json)
+    state = _parse_state_json(state_json)
     draft_id = str(uuid.uuid4())
     bucket = settings.minio_bucket_reports
     object_name = f"{current_user.id}/comparison-drafts/{draft_id}.pdf"
@@ -363,6 +406,7 @@ async def create_comparison_draft(
         file_id=file_id,
         manual_observations=manual_observations,
         flags=flags,
+        state_json=state,
         pdf_bucket_name=bucket,
         pdf_object_name=object_name,
         created_by=current_user.id,
@@ -371,7 +415,62 @@ async def create_comparison_draft(
     db.add(draft)
     db.commit()
     db.refresh(draft)
-    return _draft_to_response(draft)
+    return _draft_to_detail_response(draft)
+
+
+@router.patch("/comparison-drafts/{draft_id}", response_model=ComparisonDraftDetailResponse)
+async def update_comparison_draft(
+    draft_id: str,
+    file: UploadFile = File(...),
+    file_id: str | None = Form(None),
+    manual_observations: str | None = Form(None),
+    flags_json: str | None = Form(None),
+    state_json: str | None = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ComparisonDraftDetailResponse:
+    draft = db.scalar(select(ComparisonDraft).where(ComparisonDraft.id == draft_id))
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if draft.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed to update this draft")
+
+    raw = await file.read()
+    if len(raw) == 0:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(raw) > settings.max_upload_size_bytes:
+        raise HTTPException(status_code=413, detail="File too large")
+
+    filename = (file.filename or "").lower()
+    ct = (file.content_type or "").lower()
+    if "pdf" not in ct and not filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Expected a PDF file")
+
+    if file_id is not None and str(file_id).strip():
+        fid = str(file_id).strip()
+        file_asset = db.scalar(select(FileAsset).where(FileAsset.id == fid))
+        if file_asset is None:
+            raise HTTPException(status_code=404, detail="File not found")
+        draft.file_id = fid
+
+    if manual_observations is not None:
+        draft.manual_observations = manual_observations
+    if flags_json is not None:
+        draft.flags = _parse_flags_json(flags_json)
+    if state_json is not None:
+        draft.state_json = _parse_state_json(state_json)
+
+    storage_service.upload_bytes(
+        bucket_name=draft.pdf_bucket_name,
+        object_name=draft.pdf_object_name,
+        data=raw,
+        content_type="application/pdf",
+    )
+
+    db.add(draft)
+    db.commit()
+    db.refresh(draft)
+    return _draft_to_detail_response(draft)
 
 
 @router.delete("/comparison-drafts/{draft_id}", status_code=204)
@@ -516,22 +615,3 @@ async def create_report_with_pdf(
     db.refresh(report)
 
     return _report_to_response(report)
-
-
-@router.delete("/{report_id}", status_code=204)
-def delete_report(
-    report_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> None:
-    report = db.scalar(select(Report).where(Report.id == report_id))
-    if report is None:
-        raise HTTPException(status_code=404, detail="Report not found")
-    if report.created_by != current_user.id:
-        raise HTTPException(status_code=403, detail="Not allowed to delete this report")
-
-    if report.pdf_bucket_name and report.pdf_object_name:
-        storage_service.remove_object_best_effort(report.pdf_bucket_name, report.pdf_object_name)
-
-    db.delete(report)
-    db.commit()

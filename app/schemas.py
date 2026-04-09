@@ -120,6 +120,10 @@ class ComparisonDraftResponse(BaseModel):
     created_at: datetime
 
 
+class ComparisonDraftDetailResponse(ComparisonDraftResponse):
+    state_json: dict[str, Any] | None = None
+
+
 class AnnotationCreateRequest(BaseModel):
     file_id: str
     annotation_type: str
