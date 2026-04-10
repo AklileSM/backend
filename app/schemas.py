@@ -126,6 +126,20 @@ class ComparisonDraftDetailResponse(ComparisonDraftResponse):
     state_json: dict[str, Any] | None = None
 
 
+class ComparisonDraftCreateRequest(BaseModel):
+    file_id: str
+    manual_observations: str | None = None
+    flags: list[str] = Field(default_factory=list)
+    state: dict[str, Any]
+
+
+class ComparisonDraftUpdateRequest(BaseModel):
+    file_id: str | None = None
+    manual_observations: str | None = None
+    flags: list[str] | None = None
+    state: dict[str, Any] | None = None
+
+
 class AnnotationCreateRequest(BaseModel):
     file_id: str
     annotation_type: str

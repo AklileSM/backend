@@ -12,8 +12,10 @@ from app.config import get_settings
 from app.database import get_db
 from app.models import ComparisonDraft, FileAsset, Report, User
 from app.schemas import (
+    ComparisonDraftCreateRequest,
     ComparisonDraftDetailResponse,
     ComparisonDraftResponse,
+    ComparisonDraftUpdateRequest,
     ReportCreateRequest,
     ReportResponse,
 )
@@ -145,6 +147,16 @@ def _parse_draft_ids_json(draft_ids_json: str | None) -> list[str]:
     if not isinstance(data, list) or not all(isinstance(x, str) and x.strip() for x in data):
         raise HTTPException(status_code=400, detail="draft_ids_json must be a JSON array of ids")
     return [x.strip() for x in data]
+
+
+def _strip_draft_pdf_if_stored(draft: ComparisonDraft) -> None:
+    """Remove draft PDF from object storage and clear keys (drafts are state-only until publish)."""
+    b = (draft.pdf_bucket_name or "").strip()
+    o = (draft.pdf_object_name or "").strip()
+    if b and o:
+        storage_service.remove_object_best_effort(b, o)
+    draft.pdf_bucket_name = ""
+    draft.pdf_object_name = ""
 
 
 def _parse_state_json(state_json: str | None) -> dict | None:
@@ -342,8 +354,16 @@ def get_comparison_draft_pdf(
     if draft.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Not allowed to access this draft")
 
+    b = (draft.pdf_bucket_name or "").strip()
+    o = (draft.pdf_object_name or "").strip()
+    if not b or not o:
+        raise HTTPException(
+            status_code=404,
+            detail="This draft has no PDF. Open it in Compare to view or edit.",
+        )
+
     try:
-        total = storage_service.stat_object_size(draft.pdf_bucket_name, draft.pdf_object_name)
+        total = storage_service.stat_object_size(b, o)
     except Exception:
         raise HTTPException(status_code=404, detail="Draft PDF not found in storage")
 
@@ -355,8 +375,8 @@ def get_comparison_draft_pdf(
         first, last = parsed
         try:
             chunk = storage_service.get_object_range_bytes(
-                draft.pdf_bucket_name,
-                draft.pdf_object_name,
+                b,
+                o,
                 first,
                 last,
             )
@@ -374,7 +394,7 @@ def get_comparison_draft_pdf(
             },
         )
 
-    data = storage_service.get_object_bytes(draft.pdf_bucket_name, draft.pdf_object_name)
+    data = storage_service.get_object_bytes(b, o)
     return PlainResponse(
         content=data,
         media_type=media_type,
@@ -387,50 +407,24 @@ def get_comparison_draft_pdf(
 
 
 @router.post("/comparison-drafts", response_model=ComparisonDraftDetailResponse)
-async def create_comparison_draft(
-    file: UploadFile = File(...),
-    file_id: str = Form(...),
-    manual_observations: str | None = Form(None),
-    flags_json: str | None = Form(None),
-    state_json: str | None = Form(None),
+def create_comparison_draft(
+    body: ComparisonDraftCreateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ComparisonDraftDetailResponse:
-    file_asset = db.scalar(select(FileAsset).where(FileAsset.id == file_id))
+    file_asset = db.scalar(select(FileAsset).where(FileAsset.id == body.file_id))
     if file_asset is None:
         raise HTTPException(status_code=404, detail="File not found")
 
-    raw = await file.read()
-    if len(raw) == 0:
-        raise HTTPException(status_code=400, detail="Empty file")
-    if len(raw) > settings.max_upload_size_bytes:
-        raise HTTPException(status_code=413, detail="File too large")
-
-    filename = (file.filename or "").lower()
-    ct = (file.content_type or "").lower()
-    if "pdf" not in ct and not filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Expected a PDF file")
-
-    flags = _parse_flags_json(flags_json)
-    state = _parse_state_json(state_json)
     draft_id = str(uuid.uuid4())
-    bucket = settings.minio_bucket_reports
-    object_name = f"{current_user.id}/comparison-drafts/{draft_id}.pdf"
-    storage_service.upload_bytes(
-        bucket_name=bucket,
-        object_name=object_name,
-        data=raw,
-        content_type="application/pdf",
-    )
-
     draft = ComparisonDraft(
         id=draft_id,
-        file_id=file_id,
-        manual_observations=manual_observations,
-        flags=flags,
-        state_json=state,
-        pdf_bucket_name=bucket,
-        pdf_object_name=object_name,
+        file_id=body.file_id,
+        manual_observations=body.manual_observations,
+        flags=body.flags or [],
+        state_json=body.state,
+        pdf_bucket_name="",
+        pdf_object_name="",
         created_by=current_user.id,
         created_at=datetime.utcnow(),
     )
@@ -441,13 +435,9 @@ async def create_comparison_draft(
 
 
 @router.patch("/comparison-drafts/{draft_id}", response_model=ComparisonDraftDetailResponse)
-async def update_comparison_draft(
+def update_comparison_draft(
     draft_id: str,
-    file: UploadFile = File(...),
-    file_id: str | None = Form(None),
-    manual_observations: str | None = Form(None),
-    flags_json: str | None = Form(None),
-    state_json: str | None = Form(None),
+    body: ComparisonDraftUpdateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ComparisonDraftDetailResponse:
@@ -457,37 +447,20 @@ async def update_comparison_draft(
     if draft.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Not allowed to update this draft")
 
-    raw = await file.read()
-    if len(raw) == 0:
-        raise HTTPException(status_code=400, detail="Empty file")
-    if len(raw) > settings.max_upload_size_bytes:
-        raise HTTPException(status_code=413, detail="File too large")
-
-    filename = (file.filename or "").lower()
-    ct = (file.content_type or "").lower()
-    if "pdf" not in ct and not filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Expected a PDF file")
-
-    if file_id is not None and str(file_id).strip():
-        fid = str(file_id).strip()
+    if body.file_id is not None and str(body.file_id).strip():
+        fid = str(body.file_id).strip()
         file_asset = db.scalar(select(FileAsset).where(FileAsset.id == fid))
         if file_asset is None:
             raise HTTPException(status_code=404, detail="File not found")
         draft.file_id = fid
 
-    if manual_observations is not None:
-        draft.manual_observations = manual_observations
-    if flags_json is not None:
-        draft.flags = _parse_flags_json(flags_json)
-    if state_json is not None:
-        draft.state_json = _parse_state_json(state_json)
-
-    storage_service.upload_bytes(
-        bucket_name=draft.pdf_bucket_name,
-        object_name=draft.pdf_object_name,
-        data=raw,
-        content_type="application/pdf",
-    )
+    if body.manual_observations is not None:
+        draft.manual_observations = body.manual_observations
+    if body.flags is not None:
+        draft.flags = body.flags
+    if body.state is not None:
+        _strip_draft_pdf_if_stored(draft)
+        draft.state_json = body.state
 
     db.add(draft)
     db.commit()
@@ -506,7 +479,10 @@ def delete_comparison_draft(
         raise HTTPException(status_code=404, detail="Draft not found")
     if draft.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Not allowed to delete this draft")
-    storage_service.remove_object_best_effort(draft.pdf_bucket_name, draft.pdf_object_name)
+    b = (draft.pdf_bucket_name or "").strip()
+    o = (draft.pdf_object_name or "").strip()
+    if b and o:
+        storage_service.remove_object_best_effort(b, o)
     db.delete(draft)
     db.commit()
 
@@ -575,7 +551,10 @@ async def publish_comparison_drafts(
     db.add(report)
 
     for draft in drafts:
-        storage_service.remove_object_best_effort(draft.pdf_bucket_name, draft.pdf_object_name)
+        b = (draft.pdf_bucket_name or "").strip()
+        o = (draft.pdf_object_name or "").strip()
+        if b and o:
+            storage_service.remove_object_best_effort(b, o)
         db.delete(draft)
 
     db.commit()

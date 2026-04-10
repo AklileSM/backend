@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS comparison_drafts (
     manual_observations TEXT,
     flags JSON,
     state_json JSON,
+    -- Empty when draft has no stored PDF (PDFs built on publish); legacy rows may still reference MinIO
     pdf_bucket_name VARCHAR(255) NOT NULL,
     pdf_object_name VARCHAR(500) NOT NULL,
     created_by VARCHAR(255),
