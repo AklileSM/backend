@@ -65,6 +65,7 @@ PROMPT = (
     "You are a construction site inspector. This is a 360-degree panoramic image captured with a wide-angle lens. "
     "All walls, floors, and ceilings in this building are straight and flat — any curvature you see is purely lens distortion from the panoramic projection, not actual curved architecture. "
     "Never describe walls or surfaces as curved. Treat all surfaces as straight.\n\n"
+    "Do not show your reasoning or thinking process. Output only the final report.\n\n"
     "Look at this image and write a detailed report with three sections:\n\n"
     "SCENE: Describe what you see — the space, construction stage, ongoing work, visible materials, equipment, workers, and overall condition.\n\n"
     "QUALITY ISSUES: Describe visible workmanship concerns only. "

@@ -69,6 +69,7 @@ PROMPT = (
     "Only report what is directly visible in the image. "
     "Do not infer structural integrity, future consequences, or causes that cannot be confirmed from a single image. "
     "If you must go beyond what is visible, clearly state it as an interpretation, not a fact.\n\n"
+    "Do not show your reasoning or thinking process. Output only the final report.\n\n"
     "SCENE: Describe the space, construction stage, visible materials, equipment, and workers.\n\n"
     "QUALITY ISSUES: Describe visible workmanship concerns only. "
     "For each issue state: what is wrong and where it is visible. "
