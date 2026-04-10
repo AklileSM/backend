@@ -79,13 +79,35 @@ def _report_to_response(report: Report) -> ReportResponse:
     )
 
 
+def _draft_label_from_state(state: dict | None) -> str | None:
+    if not isinstance(state, dict):
+        return None
+    left = state.get("left")
+    right = state.get("right")
+    ln = ""
+    rn = ""
+    if isinstance(left, dict):
+        ln = str(left.get("displayFileName") or "").strip()
+    if isinstance(right, dict):
+        rn = str(right.get("displayFileName") or "").strip()
+    if ln and rn:
+        return f"{ln} vs {rn}"
+    if ln:
+        return ln
+    if rn:
+        return rn
+    return None
+
+
 def _draft_to_response(draft: ComparisonDraft) -> ComparisonDraftResponse:
     pdf_url = None
     if draft.pdf_bucket_name and draft.pdf_object_name:
         pdf_url = f"/api/reports/comparison-drafts/{draft.id}/pdf"
+    st = draft.state_json if isinstance(draft.state_json, dict) else None
     return ComparisonDraftResponse(
         id=draft.id,
         file_id=draft.file_id,
+        label=_draft_label_from_state(st),
         manual_observations=draft.manual_observations,
         flags=draft.flags or [],
         pdf_url=pdf_url,

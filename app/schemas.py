@@ -114,6 +114,8 @@ class ReportResponse(BaseModel):
 class ComparisonDraftResponse(BaseModel):
     id: str
     file_id: str
+    """Human-readable name, e.g. left display name vs right display name."""
+    label: str | None = None
     manual_observations: str | None = None
     flags: list[str] = Field(default_factory=list)
     pdf_url: str | None = None
