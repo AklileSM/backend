@@ -50,6 +50,8 @@ sys.path.insert(0, str(BACKEND_ROOT))
 
 import httpx  # noqa: E402
 from rouge_score import rouge_scorer  # noqa: E402
+import warnings
+warnings.filterwarnings("ignore")
 from bert_score import score as bert_score  # noqa: E402
 
 from app.config import get_settings  # noqa: E402
