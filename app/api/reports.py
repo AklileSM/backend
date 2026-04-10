@@ -63,6 +63,27 @@ def _parse_http_range(range_header: str | None, total: int) -> tuple[int, int] |
     return (first, min(last, total - 1))
 
 
+def _coerce_str_list(val: object | None) -> list[str]:
+    """JSON columns may deserialize as list, str, dict, or None; Pydantic expects list[str]."""
+    if val is None:
+        return []
+    if isinstance(val, (list, tuple)):
+        return [str(x) for x in val]
+    if isinstance(val, dict):
+        return []
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return []
+        try:
+            data = json.loads(s)
+            if isinstance(data, list):
+                return [str(x) for x in data]
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
 def _report_to_response(report: Report) -> ReportResponse:
     pdf_url = None
     if report.pdf_bucket_name and report.pdf_object_name:
@@ -73,8 +94,8 @@ def _report_to_response(report: Report) -> ReportResponse:
         file_id=report.file_id,
         ai_description=report.ai_description,
         manual_observations=report.manual_observations,
-        flags=report.flags or [],
-        screenshots=report.screenshots or [],
+        flags=_coerce_str_list(report.flags),
+        screenshots=_coerce_str_list(report.screenshots),
         created_by=report.created_by,
         pdf_url=pdf_url,
         created_at=report.created_at,
@@ -111,7 +132,7 @@ def _draft_to_response(draft: ComparisonDraft) -> ComparisonDraftResponse:
         file_id=draft.file_id,
         label=_draft_label_from_state(st),
         manual_observations=draft.manual_observations,
-        flags=draft.flags or [],
+        flags=_coerce_str_list(draft.flags),
         pdf_url=pdf_url,
         created_at=draft.created_at,
     )
