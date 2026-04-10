@@ -8,6 +8,7 @@ from app.api import ai, annotations, auth, files, projects, reports, rooms, uplo
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine
 from app.services.bootstrap import seed_defaults
+from app.services.db_migrations import ensure_comparison_drafts_state_json
 from app.services.storage import storage_service
 
 settings = get_settings()
@@ -28,6 +29,7 @@ def _cors_origins() -> list[str]:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
+    ensure_comparison_drafts_state_json(engine)
     with SessionLocal() as db:
         db.execute(text("SELECT 1"))
         seed_defaults(db)
