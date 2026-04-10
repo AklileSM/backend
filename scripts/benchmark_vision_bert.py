@@ -43,6 +43,10 @@ import time
 from itertools import combinations
 from pathlib import Path
 from typing import Any
+import os
+import warnings
+warnings.filterwarnings("ignore")
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # ── allow imports from app.* ────────────────────────────────────────────────
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -50,8 +54,6 @@ sys.path.insert(0, str(BACKEND_ROOT))
 
 import httpx  # noqa: E402
 from rouge_score import rouge_scorer  # noqa: E402
-import warnings
-warnings.filterwarnings("ignore")
 from bert_score import score as bert_score  # noqa: E402
 
 from app.config import get_settings  # noqa: E402
