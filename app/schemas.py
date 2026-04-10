@@ -140,6 +140,36 @@ class ComparisonDraftUpdateRequest(BaseModel):
     state: dict[str, Any] | None = None
 
 
+class ViewerDraftResponse(BaseModel):
+    id: str
+    file_id: str
+    viewer_kind: str
+    label: str | None = None
+    manual_observations: str | None = None
+    flags: list[str] = Field(default_factory=list)
+    created_at: datetime
+
+
+class ViewerDraftDetailResponse(ViewerDraftResponse):
+    state_json: dict[str, Any] | None = None
+
+
+class ViewerDraftCreateRequest(BaseModel):
+    file_id: str
+    viewer_kind: str = Field(min_length=1, max_length=32)
+    manual_observations: str | None = None
+    flags: list[str] = Field(default_factory=list)
+    state: dict[str, Any]
+
+
+class ViewerDraftUpdateRequest(BaseModel):
+    file_id: str | None = None
+    viewer_kind: str | None = Field(default=None, max_length=32)
+    manual_observations: str | None = None
+    flags: list[str] | None = None
+    state: dict[str, Any] | None = None
+
+
 class AnnotationCreateRequest(BaseModel):
     file_id: str
     annotation_type: str
