@@ -145,8 +145,8 @@ def call_ollama(
         ],
         "max_tokens": 4096,
         "temperature": 0.3,
-        "top_p": 0.9,
-        "frequency_penalty": 1.3,
+        "top_p": 0.6,
+        # "frequency_penalty": 1.3,
         "stream": False,
     }
 
