@@ -74,7 +74,7 @@ PROMPT = (
     "SAFETY ISSUES: Describe visible safety hazards only. "
     "For each hazard, state the hazard type (fall, trip, electrical, or PPE), its location, and who is at risk. "
     "Only report hazards that are clearly visible in the image.\n\n"
-    "Write 3 sentences per section. Do not repeat points across sections."
+    "Write upto 3 sentences per section. Do not repeat points across sections."
 )
 
 REQUIRED_SECTIONS = ["SCENE", "QUALITY ISSUES", "SAFETY ISSUES"]
