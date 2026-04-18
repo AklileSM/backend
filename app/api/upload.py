@@ -22,6 +22,7 @@ settings = get_settings()
 
 _ALLOWED_MEDIA = frozenset({"image", "video", "pointcloud", "pdf"})
 _POINTCLOUD_CHUNK = 32 * 1024 * 1024  # 32 MB chunks to reduce request overhead on large uploads
+_UPLOAD_CHUNK = 1 * 1024 * 1024       # 1 MB chunks for images, PDFs, and videos
 _POINTCLOUD_UPLOAD_DIR = Path(tempfile.gettempdir()) / "a6_pointcloud_uploads"
 
 _CANONICAL_EXTENSION: dict[str, str] = {
@@ -527,61 +528,81 @@ async def upload_single(
             background_tasks=background_tasks,
         )
 
-    # --- All other types: read into memory (images, videos, PDFs) ---
-    raw = await file.read()
-    if len(raw) > settings.max_upload_size_bytes:
-        raise HTTPException(status_code=413, detail="File too large")
+    # --- All other types: stream to a temp file to avoid loading large files into RAM ---
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=extension)
+    file_size = 0
+    try:
+        with os.fdopen(tmp_fd, "wb") as tmp_file:
+            while True:
+                chunk = await file.read(_UPLOAD_CHUNK)
+                if not chunk:
+                    break
+                file_size += len(chunk)
+                if file_size > settings.max_upload_size_bytes:
+                    raise HTTPException(status_code=413, detail="File too large")
+                tmp_file.write(chunk)
 
-    storage_service.upload_bytes(
-        bucket_name=bucket_name,
-        object_name=object_name,
-        data=raw,
-        content_type=content_type,
-    )
-
-    thumbnail_bucket_name = None
-    thumbnail_object_name = None
-    if media_type == "image" and content_type.startswith("image/"):
-        thumbnail_bucket_name = settings.minio_bucket_thumbnails
-        thumbnail_object_name = (
-            f"{room.slug}/{capture_date.isoformat()}/thumb-{uuid.uuid4().hex}.jpg"
-        )
-        thumbnail = storage_service.generate_thumbnail(raw)
-        storage_service.upload_bytes(
-            bucket_name=thumbnail_bucket_name,
-            object_name=thumbnail_object_name,
-            data=thumbnail,
-            content_type="image/jpeg",
+        storage_service.upload_file_path(
+            bucket_name=bucket_name,
+            object_name=object_name,
+            file_path=tmp_path,
+            content_type=content_type,
         )
 
-    asset = FileAsset(
-        room_id=room.id,
-        media_type=media_type,
-        capture_date=capture_date,
-        original_name=file.filename or "upload",
-        display_name=display_name,
-        bucket_name=bucket_name,
-        object_name=object_name,
-        thumbnail_bucket_name=thumbnail_bucket_name,
-        thumbnail_object_name=thumbnail_object_name,
-        content_type=content_type,
-        file_size=len(raw),
-        metadata_json={
-            "uploaded_by_user_id": current_user.id,
-            "uploaded_by_username": current_user.username,
-        },
-    )
-    db.add(asset)
-    db.commit()
-    db.refresh(asset)
+        thumbnail_bucket_name = None
+        thumbnail_object_name = None
+        if media_type == "image" and content_type.startswith("image/"):
+            thumbnail_bucket_name = settings.minio_bucket_thumbnails
+            thumbnail_object_name = (
+                f"{room.slug}/{capture_date.isoformat()}/thumb-{uuid.uuid4().hex}.jpg"
+            )
+            with open(tmp_path, "rb") as f:
+                raw = f.read()
+            thumbnail = storage_service.generate_thumbnail(raw)
+            storage_service.upload_bytes(
+                bucket_name=thumbnail_bucket_name,
+                object_name=thumbnail_object_name,
+                data=thumbnail,
+                content_type="image/jpeg",
+            )
 
-    return UploadResponse(
-        id=asset.id,
-        room=room.slug,
-        media_type=asset.media_type,
-        file_name=asset.display_name,
-        capture_date=asset.capture_date,
-    )
+        asset = FileAsset(
+            room_id=room.id,
+            media_type=media_type,
+            capture_date=capture_date,
+            original_name=file.filename or "upload",
+            display_name=display_name,
+            bucket_name=bucket_name,
+            object_name=object_name,
+            thumbnail_bucket_name=thumbnail_bucket_name,
+            thumbnail_object_name=thumbnail_object_name,
+            content_type=content_type,
+            file_size=file_size,
+            metadata_json={
+                "uploaded_by_user_id": current_user.id,
+                "uploaded_by_username": current_user.username,
+            },
+        )
+        db.add(asset)
+        db.commit()
+        db.refresh(asset)
+
+        return UploadResponse(
+            id=asset.id,
+            room=room.slug,
+            media_type=asset.media_type,
+            file_name=asset.display_name,
+            capture_date=asset.capture_date,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        raise
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 async def _upload_pointcloud(
