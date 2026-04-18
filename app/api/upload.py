@@ -558,7 +558,9 @@ async def upload_single(
             )
             with open(tmp_path, "rb") as f:
                 raw = f.read()
-            thumbnail = storage_service.generate_thumbnail(raw)
+            thumbnail = await asyncio.get_event_loop().run_in_executor(
+                None, storage_service.generate_thumbnail, raw
+            )
             storage_service.upload_bytes(
                 bucket_name=thumbnail_bucket_name,
                 object_name=thumbnail_object_name,
