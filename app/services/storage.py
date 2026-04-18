@@ -5,7 +5,7 @@ from urllib.parse import urlparse, urlunparse
 
 from minio import Minio
 from minio.error import S3Error
-from PIL import Image
+from PIL import Image, ImageOps
 
 from app.config import get_settings
 
@@ -136,7 +136,7 @@ class StorageService:
         image = Image.open(BytesIO(raw_bytes))
         if image.mode not in ("RGB", "L"):
             image = image.convert("RGB")
-        image.thumbnail((settings.thumbnail_width, settings.thumbnail_height))
+        image = ImageOps.fit(image, (settings.thumbnail_width, settings.thumbnail_height), Image.LANCZOS)
         output = BytesIO()
         image.save(output, format="JPEG", quality=settings.thumbnail_quality, optimize=True)
         return output.getvalue()
