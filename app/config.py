@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     thumbnail_height: int = 300
     thumbnail_quality: int = 82
 
-    jwt_secret: str = "dev-only-change-me"  # override with JWT_SECRET in production
+    jwt_secret: str = ""  # override with JWT_SECRET in production
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 10080
 
