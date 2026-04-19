@@ -3,7 +3,9 @@ import os
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+from typing import Optional
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -14,6 +16,41 @@ logger = logging.getLogger(__name__)
 
 # Timeout in seconds for the conversion subprocess (10 minutes).
 _CONVERSION_TIMEOUT = 600
+
+# --- Converter process pool ---------------------------------------------------
+# Initialized by init_converter_pool() at server startup (main.py lifespan).
+# Each submitted task runs in a separate process, so multiple conversions run
+# in parallel without blocking the web server's thread pool.
+_converter_pool: Optional[ProcessPoolExecutor] = None
+
+
+def init_converter_pool(max_workers: int = 2) -> None:
+    """Create the process pool. Call once at server startup."""
+    global _converter_pool
+    _converter_pool = ProcessPoolExecutor(max_workers=max_workers)
+    logger.info("Pointcloud converter pool started (max_workers=%d)", max_workers)
+
+
+def shutdown_converter_pool() -> None:
+    """Shut down the process pool gracefully. Call on server shutdown."""
+    global _converter_pool
+    if _converter_pool is not None:
+        _converter_pool.shutdown(wait=False, cancel_futures=False)
+        _converter_pool = None
+        logger.info("Pointcloud converter pool shut down")
+
+
+def submit_conversion(asset_id: str, laz_tmp_path: str) -> None:
+    """Submit a conversion job to the process pool.
+
+    Raises RuntimeError if the pool has not been initialised yet.
+    The submitted function runs in a separate process so it does not
+    block FastAPI's async event loop or thread pool.
+    """
+    if _converter_pool is None:
+        raise RuntimeError("Converter pool is not initialised — call init_converter_pool() at startup")
+    _converter_pool.submit(convert_pointcloud_background, asset_id, laz_tmp_path)
+    logger.info("Conversion job submitted for asset %s", asset_id)
 
 
 def _remove_original_pointcloud_object(db, asset: FileAsset) -> None:

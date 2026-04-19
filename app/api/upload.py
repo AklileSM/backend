@@ -10,7 +10,7 @@ from datetime import date
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -19,7 +19,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.models import FileAsset, Room, User
 from app.schemas import UploadResponse
-from app.services.pointcloud import convert_pointcloud_background
+from app.services.pointcloud import submit_conversion
 from app.services.storage import storage_service
 
 router = APIRouter()
@@ -149,7 +149,6 @@ def _read_upload_manifest(manifest_path: Path) -> dict[str, str]:
 def _save_pointcloud_asset_and_queue_conversion(
     *,
     db: Session,
-    background_tasks: BackgroundTasks,
     room: Room,
     capture_date: date,
     original_filename: str,
@@ -181,8 +180,9 @@ def _save_pointcloud_asset_and_queue_conversion(
     db.commit()
     db.refresh(asset)
 
-    # Schedule conversion — temp file is cleaned up by the task when done.
-    background_tasks.add_task(convert_pointcloud_background, asset.id, local_path_for_conversion)
+    # Submit to the process pool — runs in a separate process, does not block
+    # the web server. Temp file is cleaned up by convert_pointcloud_background.
+    submit_conversion(asset.id, local_path_for_conversion)
 
     return UploadResponse(
         id=asset.id,
@@ -310,7 +310,6 @@ async def upload_pointcloud_chunk(
 
 @router.post("/pointcloud/complete", response_model=UploadResponse)
 def complete_pointcloud_upload(
-    background_tasks: BackgroundTasks,
     upload_id: str = Form(...),
     total_chunks: int = Form(...),
     db: Session = Depends(get_db),
@@ -402,7 +401,6 @@ def complete_pointcloud_upload(
 
     return _save_pointcloud_asset_and_queue_conversion(
         db=db,
-        background_tasks=background_tasks,
         room=room,
         capture_date=capture_date,
         original_filename=original_filename,
@@ -418,7 +416,6 @@ def complete_pointcloud_upload(
 
 @router.post("/pointcloud/direct-complete", response_model=UploadResponse)
 def complete_pointcloud_direct_upload(
-    background_tasks: BackgroundTasks,
     upload_id: str = Form(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_user_can_upload),
@@ -475,7 +472,6 @@ def complete_pointcloud_direct_upload(
 
         return _save_pointcloud_asset_and_queue_conversion(
             db=db,
-            background_tasks=background_tasks,
             room=room,
             capture_date=capture_date,
             original_filename=original_filename,
@@ -500,7 +496,6 @@ def complete_pointcloud_direct_upload(
 
 @router.post("/single", response_model=UploadResponse)
 async def upload_single(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     room_slug: str = Form(...),
     media_type: str = Form(...),
@@ -553,7 +548,6 @@ async def upload_single(
             extension=extension,
             current_user=current_user,
             db=db,
-            background_tasks=background_tasks,
         )
 
     # --- All other types: stream to a temp file to avoid loading large files into RAM ---
@@ -646,10 +640,9 @@ async def _upload_pointcloud(
     extension: str,
     current_user: User,
     db: Session,
-    background_tasks: BackgroundTasks,
 ) -> UploadResponse:
     """Stream a LAZ/point-cloud file to a temp file, upload to MinIO, then
-    trigger PotreeConverter as a background task."""
+    submit conversion to the process pool."""
 
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=extension)
     try:
@@ -697,8 +690,9 @@ async def _upload_pointcloud(
     db.commit()
     db.refresh(asset)
 
-    # Schedule conversion — tmp_path is cleaned up by the task when done.
-    background_tasks.add_task(convert_pointcloud_background, asset.id, tmp_path)
+    # Submit to the process pool — runs in a separate process, does not block
+    # the web server. Temp file is cleaned up by convert_pointcloud_background.
+    submit_conversion(asset.id, tmp_path)
 
     return UploadResponse(
         id=asset.id,
