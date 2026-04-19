@@ -1,9 +1,14 @@
+import logging
 import mimetypes
 import os
+import shutil
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from datetime import date
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func, select
@@ -19,6 +24,29 @@ from app.services.storage import storage_service
 
 router = APIRouter()
 settings = get_settings()
+
+_STALE_UPLOAD_AGE_SECONDS = 4 * 3600  # 4 hours
+
+
+def cleanup_stale_uploads() -> None:
+    """Remove abandoned chunked-upload temp directories older than 4 hours.
+
+    Called once at server startup. Safe to call multiple times — errors on
+    individual directories are logged and skipped.
+    """
+    if not _POINTCLOUD_UPLOAD_DIR.exists():
+        return
+    now = time.time()
+    for d in _POINTCLOUD_UPLOAD_DIR.iterdir():
+        if not d.is_dir():
+            continue
+        try:
+            age = now - d.stat().st_mtime
+            if age > _STALE_UPLOAD_AGE_SECONDS:
+                shutil.rmtree(d, ignore_errors=True)
+                logger.info("Removed stale upload directory %s (age %.0f s)", d, age)
+        except OSError as exc:
+            logger.warning("Could not check/remove stale upload dir %s: %s", d, exc)
 
 _ALLOWED_MEDIA = frozenset({"image", "video", "pointcloud", "pdf"})
 _POINTCLOUD_CHUNK = 32 * 1024 * 1024  # 32 MB chunks to reduce request overhead on large uploads

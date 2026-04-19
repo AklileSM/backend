@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api import ai, annotations, auth, files, projects, reports, rooms, upload
+from app.api.upload import cleanup_stale_uploads
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine
 from app.services.bootstrap import seed_defaults
@@ -34,6 +35,7 @@ async def lifespan(_: FastAPI):
         db.execute(text("SELECT 1"))
         seed_defaults(db)
     storage_service.ensure_buckets()
+    cleanup_stale_uploads()
     yield
 
 
