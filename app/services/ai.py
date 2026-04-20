@@ -95,6 +95,15 @@ async def analyze_image_url(
     file_id: str | None = None,
     db: Session | None = None,
 ) -> dict[str, Any]:
+    # Check DB-persisted cache first (survives restarts)
+    if file_id and db is not None:
+        asset = db.scalar(select(FileAsset).where(FileAsset.id == file_id))
+        if asset is not None:
+            cached = (asset.metadata_json or {}).get("ai_description")
+            if cached:
+                _cache[f"file:{file_id}"] = cached
+                return {"description": cached, "cached": True}
+
     async with httpx.AsyncClient(timeout=120) as client:
         vision_url, cache_key = await _resolve_vision_url(client, db, image_url, file_id)
 
@@ -181,4 +190,12 @@ async def analyze_image_url(
             raise RuntimeError("Vision model returned an empty description")
 
         _cache[cache_key] = description
+
+        # Persist to DB so the result survives backend restarts
+        if file_id and db is not None:
+            asset = db.scalar(select(FileAsset).where(FileAsset.id == file_id))
+            if asset is not None:
+                asset.metadata_json = {**(asset.metadata_json or {}), "ai_description": description}
+                db.commit()
+
         return {"description": description, "cached": False}
