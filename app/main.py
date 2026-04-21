@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.database import Base, SessionLocal, engine
 from app.services.bootstrap import seed_defaults
 from app.services.db_migrations import ensure_comparison_drafts_state_json
-from app.services.pointcloud import init_converter_pool, shutdown_converter_pool
+from app.services.pointcloud import init_converter_pool, reset_interrupted_conversions, shutdown_converter_pool
 from app.services.storage import storage_service
 
 settings = get_settings()
@@ -37,6 +37,7 @@ async def lifespan(_: FastAPI):
         seed_defaults(db)
     storage_service.ensure_buckets()
     cleanup_stale_uploads()
+    reset_interrupted_conversions()
     init_converter_pool(max_workers=2)
     yield
     shutdown_converter_pool()

@@ -31,6 +31,40 @@ def init_converter_pool(max_workers: int = 2) -> None:
     logger.info("Pointcloud converter pool started (max_workers=%d)", max_workers)
 
 
+def reset_interrupted_conversions() -> None:
+    """Mark any pending/processing conversions as failed.
+
+    Called at startup: if the server restarted mid-conversion the process pool
+    is gone, so those jobs will never finish. Resetting them lets users re-upload
+    rather than waiting forever.
+    """
+    from app.database import SessionLocal
+    from app.models import FileAsset
+    from sqlalchemy import select
+
+    db = SessionLocal()
+    try:
+        assets = db.scalars(
+            select(FileAsset).where(FileAsset.media_type == "pointcloud")
+        ).all()
+        reset_count = 0
+        for asset in assets:
+            status = (asset.metadata_json or {}).get("conversion_status")
+            if status in ("pending", "processing"):
+                meta = dict(asset.metadata_json or {})
+                meta["conversion_status"] = "failed"
+                meta["conversion_error"] = "Conversion interrupted by server restart — please re-upload."
+                asset.metadata_json = meta
+                reset_count += 1
+        if reset_count:
+            db.commit()
+            logger.warning("Reset %d interrupted pointcloud conversion(s) to 'failed'", reset_count)
+    except Exception:
+        logger.exception("Failed to reset interrupted conversions on startup")
+    finally:
+        db.close()
+
+
 def shutdown_converter_pool() -> None:
     """Shut down the process pool gracefully. Call on server shutdown."""
     global _converter_pool

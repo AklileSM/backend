@@ -181,9 +181,19 @@ def _save_pointcloud_asset_and_queue_conversion(
     db.commit()
     db.refresh(asset)
 
-    # Submit to the process pool — runs in a separate process, does not block
-    # the web server. Temp file is cleaned up by convert_pointcloud_background.
-    submit_conversion(asset.id, local_path_for_conversion)
+    try:
+        # Runs in a separate process — does not block the web server.
+        # Temp file is cleaned up by convert_pointcloud_background.
+        submit_conversion(asset.id, local_path_for_conversion)
+    except Exception as exc:
+        # Pool not ready or other submission error — remove the orphaned asset
+        # so the user can retry rather than being stuck at "pending" forever.
+        try:
+            db.delete(asset)
+            db.commit()
+        except Exception:
+            pass
+        raise RuntimeError(f"Failed to queue conversion: {exc}") from exc
 
     return UploadResponse(
         id=asset.id,
@@ -243,6 +253,12 @@ def init_pointcloud_direct_upload(
     db: Session = Depends(get_db),
     _: User = Depends(require_user_can_upload),
 ) -> dict[str, str]:
+    if not settings.minio_public_upload_base_url.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Direct upload not available: MINIO_PUBLIC_UPLOAD_BASE_URL is not configured.",
+        )
+
     room = db.scalar(select(Room).where(Room.slug == room_slug))
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
