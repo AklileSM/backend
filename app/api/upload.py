@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 import mimetypes
 import os
@@ -137,6 +138,22 @@ def _safe_filename(name: str) -> str:
     return base
 
 
+def _check_duplicate(db: "Session", room_id: str, capture_date: date, sha256_hash: str) -> None:
+    """Raise 409 if an identical file already exists for this room and capture date."""
+    existing = db.scalar(
+        select(FileAsset).where(
+            FileAsset.room_id == room_id,
+            FileAsset.capture_date == capture_date,
+            FileAsset.sha256_hash == sha256_hash,
+        )
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="A file with identical content already exists in this room for the selected date.",
+        )
+
+
 def _read_upload_manifest(manifest_path: Path) -> dict[str, str]:
     meta: dict[str, str] = {}
     for raw in manifest_path.read_text(encoding="utf-8").splitlines():
@@ -160,6 +177,7 @@ def _save_pointcloud_asset_and_queue_conversion(
     current_user: User,
     local_path_for_conversion: str,
     display_name: str,
+    sha256_hash: str | None = None,
 ) -> UploadResponse:
     asset = FileAsset(
         room_id=room.id,
@@ -171,6 +189,7 @@ def _save_pointcloud_asset_and_queue_conversion(
         object_name=object_name,
         content_type=content_type,
         file_size=file_size,
+        sha256_hash=sha256_hash,
         metadata_json={
             "uploaded_by_user_id": current_user.id,
             "uploaded_by_username": current_user.username,
@@ -367,6 +386,7 @@ def complete_pointcloud_upload(
 
     tmp_fd, assembled_path = tempfile.mkstemp(suffix=extension or ".laz")
     file_size = 0
+    hasher = hashlib.sha256()
     try:
         with os.fdopen(tmp_fd, "wb") as out:
             for i in range(total_chunks):
@@ -381,7 +401,11 @@ def complete_pointcloud_upload(
                         file_size += len(buf)
                         if file_size > settings.max_upload_size_bytes:
                             raise HTTPException(status_code=413, detail="File too large")
+                        hasher.update(buf)
                         out.write(buf)
+
+        sha256_hash = hasher.hexdigest()
+        _check_duplicate(db, room.id, capture_date, sha256_hash)
 
         storage_service.upload_file_path(
             bucket_name=bucket_name,
@@ -428,6 +452,7 @@ def complete_pointcloud_upload(
         current_user=current_user,
         local_path_for_conversion=assembled_path,
         display_name=display_name,
+        sha256_hash=sha256_hash,
     )
 
 
@@ -487,6 +512,32 @@ def complete_pointcloud_direct_upload(
                 pass
             raise HTTPException(status_code=400, detail="Failed to prepare uploaded pointcloud")
 
+        hasher = hashlib.sha256()
+        try:
+            with open(tmp_path, "rb") as f:
+                while True:
+                    buf = f.read(_POINTCLOUD_CHUNK)
+                    if not buf:
+                        break
+                    hasher.update(buf)
+        except OSError:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise HTTPException(status_code=500, detail="Failed to read uploaded pointcloud")
+
+        sha256_hash = hasher.hexdigest()
+        try:
+            _check_duplicate(db, room.id, capture_date, sha256_hash)
+        except HTTPException:
+            storage_service.remove_object_best_effort(bucket_name, object_name)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
         return _save_pointcloud_asset_and_queue_conversion(
             db=db,
             room=room,
@@ -499,6 +550,7 @@ def complete_pointcloud_direct_upload(
             current_user=current_user,
             local_path_for_conversion=tmp_path,
             display_name=display_name,
+            sha256_hash=sha256_hash,
         )
     finally:
         try:
@@ -570,6 +622,7 @@ async def upload_single(
     # --- All other types: stream to a temp file to avoid loading large files into RAM ---
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=extension)
     file_size = 0
+    hasher = hashlib.sha256()
     try:
         with os.fdopen(tmp_fd, "wb") as tmp_file:
             while True:
@@ -579,7 +632,11 @@ async def upload_single(
                 file_size += len(chunk)
                 if file_size > settings.max_upload_size_bytes:
                     raise HTTPException(status_code=413, detail="File too large")
+                hasher.update(chunk)
                 tmp_file.write(chunk)
+
+        sha256_hash = hasher.hexdigest()
+        _check_duplicate(db, room.id, capture_date, sha256_hash)
 
         storage_service.upload_file_path(
             bucket_name=bucket_name,
@@ -619,6 +676,7 @@ async def upload_single(
             thumbnail_object_name=thumbnail_object_name,
             content_type=content_type,
             file_size=file_size,
+            sha256_hash=sha256_hash,
             metadata_json={
                 "uploaded_by_user_id": current_user.id,
                 "uploaded_by_username": current_user.username,
@@ -664,6 +722,7 @@ async def _upload_pointcloud(
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=extension)
     try:
         file_size = 0
+        hasher = hashlib.sha256()
         with os.fdopen(tmp_fd, "wb") as tmp_file:
             while True:
                 chunk = await file.read(_POINTCLOUD_CHUNK)
@@ -672,7 +731,11 @@ async def _upload_pointcloud(
                 file_size += len(chunk)
                 if file_size > settings.max_upload_size_bytes:
                     raise HTTPException(status_code=413, detail="File too large")
+                hasher.update(chunk)
                 tmp_file.write(chunk)
+
+        sha256_hash = hasher.hexdigest()
+        _check_duplicate(db, room.id, capture_date, sha256_hash)
 
         storage_service.upload_file_path(
             bucket_name=bucket_name,
@@ -697,6 +760,7 @@ async def _upload_pointcloud(
         object_name=object_name,
         content_type=content_type,
         file_size=file_size,
+        sha256_hash=sha256_hash,
         metadata_json={
             "uploaded_by_user_id": current_user.id,
             "uploaded_by_username": current_user.username,
