@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import require_user_can_upload
 from app.config import get_settings
@@ -139,18 +139,17 @@ def _safe_filename(name: str) -> str:
 
 
 def _check_duplicate(db: "Session", room_id: str, capture_date: date, sha256_hash: str) -> None:
-    """Raise 409 if an identical file already exists for this room and capture date."""
+    """Raise 409 if an identical file already exists anywhere in the system."""
     existing = db.scalar(
-        select(FileAsset).where(
-            FileAsset.room_id == room_id,
-            FileAsset.capture_date == capture_date,
-            FileAsset.sha256_hash == sha256_hash,
-        )
+        select(FileAsset)
+        .where(FileAsset.sha256_hash == sha256_hash)
+        .options(joinedload(FileAsset.room))
     )
     if existing is not None:
+        room_name = existing.room.name if existing.room else "an unknown room"
         raise HTTPException(
             status_code=409,
-            detail="A file with identical content already exists in this room for the selected date.",
+            detail=f"This file has already been uploaded to {room_name} on {existing.capture_date} as \"{existing.display_name}\".",
         )
 
 
