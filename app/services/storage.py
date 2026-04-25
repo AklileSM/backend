@@ -72,9 +72,12 @@ class StorageService:
         """Return a streaming MinIO response. Caller must close it."""
         return self.client.get_object(bucket_name, object_name)
 
+    def stat_object(self, bucket_name: str, object_name: str):
+        """Return the full MinIO stat object (.size, .etag, .last_modified)."""
+        return self.client.stat_object(bucket_name, object_name)
+
     def stat_object_size(self, bucket_name: str, object_name: str) -> int:
-        st = self.client.stat_object(bucket_name, object_name)
-        return int(st.size)
+        return int(self.stat_object(bucket_name, object_name).size)
 
     def get_object_range_bytes(
         self,

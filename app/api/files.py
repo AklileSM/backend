@@ -5,6 +5,7 @@ import re
 import tempfile
 from collections import defaultdict
 from datetime import date
+from email.utils import format_datetime as _fmt_datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -32,6 +33,29 @@ from app.services.storage import storage_service
 router = APIRouter()
 
 _POTREE_FILES = frozenset({"metadata.json", "hierarchy.bin", "octree.bin"})
+
+
+def _make_cache_headers(stat) -> dict[str, str]:
+    """Build ETag, Last-Modified, and Cache-Control headers from a MinIO stat object."""
+    headers: dict[str, str] = {"Cache-Control": "public, max-age=86400"}
+    if stat.etag:
+        headers["ETag"] = f'"{stat.etag.strip(chr(34))}"'
+    if stat.last_modified is not None:
+        try:
+            headers["Last-Modified"] = _fmt_datetime(stat.last_modified, usegmt=True)
+        except Exception:
+            pass
+    return headers
+
+
+def _is_not_modified(request: Request, etag_header: str | None) -> bool:
+    """Return True if If-None-Match matches the given ETag (304 eligible)."""
+    if not etag_header:
+        return False
+    inm = request.headers.get("if-none-match", "").strip()
+    if not inm:
+        return False
+    return inm == "*" or etag_header in {x.strip() for x in inm.split(",")}
 
 
 def _parse_http_range(range_header: str | None, total: int) -> tuple[int, int] | None:
@@ -287,11 +311,18 @@ def get_file_url(file_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
 
 
 @router.get("/{asset_id}/thumbnail", response_model=None)
-def proxy_file_thumbnail(asset_id: str, db: Session = Depends(get_db)) -> PlainResponse:
+def proxy_file_thumbnail(asset_id: str, request: Request, db: Session = Depends(get_db)) -> PlainResponse:
     asset = db.scalar(select(FileAsset).where(FileAsset.id == asset_id))
     if asset is None or not (asset.thumbnail_bucket_name and asset.thumbnail_object_name):
         raise HTTPException(status_code=404, detail="Not found")
     media_type = "image/jpeg"
+    try:
+        stat = storage_service.stat_object(asset.thumbnail_bucket_name, asset.thumbnail_object_name)
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not found in storage")
+    cache_headers = _make_cache_headers(stat)
+    if _is_not_modified(request, cache_headers.get("ETag")):
+        return PlainResponse(status_code=304, headers=cache_headers)
     try:
         data = storage_service.get_object_bytes(asset.thumbnail_bucket_name, asset.thumbnail_object_name)
     except Exception:
@@ -299,10 +330,7 @@ def proxy_file_thumbnail(asset_id: str, db: Session = Depends(get_db)) -> PlainR
     return PlainResponse(
         content=data,
         media_type=media_type,
-        headers={
-            "Content-Length": str(len(data)),
-            "Cache-Control": "public, max-age=86400",
-        },
+        headers={"Content-Length": str(len(data)), **cache_headers},
     )
 
 
@@ -318,15 +346,21 @@ def proxy_file_content(asset_id: str, request: Request, db: Session = Depends(ge
 
     media_type = _content_type_for_asset(asset)
     try:
-        total = storage_service.stat_object_size(asset.bucket_name, asset.object_name)
+        stat = storage_service.stat_object(asset.bucket_name, asset.object_name)
+        total = int(stat.size)
     except Exception:
         raise HTTPException(status_code=404, detail="File not found in storage")
+    cache_headers = _make_cache_headers(stat)
 
     range_header = request.headers.get("range")
     try:
         parsed = _parse_http_range(range_header, total)
     except HTTPException:
         raise
+
+    # 304 only for full-file requests (range requests must get 206 with the actual bytes)
+    if parsed is None and _is_not_modified(request, cache_headers.get("ETag")):
+        return PlainResponse(status_code=304, headers={"Accept-Ranges": "bytes", **cache_headers})
 
     if parsed is not None:
         first, last = parsed
@@ -344,7 +378,7 @@ def proxy_file_content(asset_id: str, request: Request, db: Session = Depends(ge
                 "Content-Range": f"bytes {first}-{last}/{total}",
                 "Content-Length": str(len(chunk)),
                 "Accept-Ranges": "bytes",
-                "Cache-Control": "public, max-age=86400",
+                **cache_headers,
             },
         )
 
@@ -359,11 +393,7 @@ def proxy_file_content(asset_id: str, request: Request, db: Session = Depends(ge
         return PlainResponse(
             content=data,
             media_type=media_type,
-            headers={
-                "Accept-Ranges": "bytes",
-                "Content-Length": str(len(data)),
-                "Cache-Control": "public, max-age=86400",
-            },
+            headers={"Accept-Ranges": "bytes", "Content-Length": str(len(data)), **cache_headers},
         )
 
     stream = storage_service.stream_object(asset.bucket_name, asset.object_name)
@@ -379,11 +409,7 @@ def proxy_file_content(asset_id: str, request: Request, db: Session = Depends(ge
     return StreamingResponse(
         body(),
         media_type=media_type,
-        headers={
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(total),
-            "Cache-Control": "public, max-age=86400",
-        },
+        headers={"Accept-Ranges": "bytes", "Content-Length": str(total), **cache_headers},
     )
 
 
@@ -504,9 +530,11 @@ def proxy_pointcloud_file(
     content_type = "application/json" if filename.endswith(".json") else "application/octet-stream"
 
     try:
-        total = storage_service.stat_object_size(asset.bucket_name, object_name)
+        stat = storage_service.stat_object(asset.bucket_name, object_name)
+        total = int(stat.size)
     except Exception:
         raise HTTPException(status_code=404, detail="File not found in storage")
+    cache_headers = _make_cache_headers(stat)
 
     range_header = request.headers.get("range")
     logger.debug("pointcloud proxy: %s total=%d range=%s", filename, total, range_header)
@@ -515,6 +543,9 @@ def proxy_pointcloud_file(
         parsed = _parse_http_range(range_header, total)
     except HTTPException:
         raise
+
+    if parsed is None and _is_not_modified(request, cache_headers.get("ETag")):
+        return PlainResponse(status_code=304, headers={"Accept-Ranges": "bytes", **cache_headers})
 
     if parsed is not None:
         first, last = parsed
@@ -532,7 +563,7 @@ def proxy_pointcloud_file(
                 "Content-Range": f"bytes {first}-{last}/{total}",
                 "Content-Length": str(len(chunk)),
                 "Accept-Ranges": "bytes",
-                "Cache-Control": "public, max-age=86400",
+                **cache_headers,
             },
         )
 
@@ -544,9 +575,5 @@ def proxy_pointcloud_file(
     return PlainResponse(
         content=data,
         media_type=content_type,
-        headers={
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(len(data)),
-            "Cache-Control": "public, max-age=86400",
-        },
+        headers={"Accept-Ranges": "bytes", "Content-Length": str(len(data)), **cache_headers},
     )
