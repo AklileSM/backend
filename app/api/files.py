@@ -348,6 +348,24 @@ def proxy_file_content(asset_id: str, request: Request, db: Session = Depends(ge
             },
         )
 
+    # Whole-file: prefer one buffer + Content-Length for small files (avoids chunked encoding
+    # overhead and proxy 502s). Stream large files so TTFB is immediate for panoramas.
+    _INLINE_MAX = 5 * 1024 * 1024
+    if total <= _INLINE_MAX:
+        try:
+            data = storage_service.get_object_bytes(asset.bucket_name, asset.object_name)
+        except Exception:
+            raise HTTPException(status_code=404, detail="File not found in storage")
+        return PlainResponse(
+            content=data,
+            media_type=media_type,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(len(data)),
+                "Cache-Control": "public, max-age=86400",
+            },
+        )
+
     stream = storage_service.stream_object(asset.bucket_name, asset.object_name)
 
     def body():
