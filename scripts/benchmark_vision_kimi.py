@@ -177,7 +177,7 @@ def call_ollama(
                 ],
             }
         ],
-        "max_tokens": 4096,
+        "max_tokens": 1024 if use_kimi else 4096,
         "temperature": 0.3,
         "top_p": 0.6,
         # "frequency_penalty": 1.3,
