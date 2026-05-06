@@ -9,7 +9,7 @@ from app.api.upload import cleanup_stale_uploads
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine
 from app.services.bootstrap import seed_defaults
-from app.services.db_migrations import ensure_comparison_drafts_state_json, ensure_file_assets_sha256_hash
+from app.services.db_migrations import ensure_comparison_drafts_state_json, ensure_file_assets_sha256_hash, ensure_file_assets_ai_description
 from app.services.pointcloud import init_converter_pool, reset_interrupted_conversions, shutdown_converter_pool
 from app.services.storage import storage_service
 
@@ -33,6 +33,7 @@ async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
     ensure_comparison_drafts_state_json(engine)
     ensure_file_assets_sha256_hash(engine)
+    ensure_file_assets_ai_description(engine)
     with SessionLocal() as db:
         db.execute(text("SELECT 1"))
         seed_defaults(db)

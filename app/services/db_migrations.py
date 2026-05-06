@@ -38,3 +38,18 @@ def ensure_file_assets_sha256_hash(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE file_assets ADD COLUMN sha256_hash VARCHAR(64)"))
     logger.info("Added file_assets.sha256_hash column")
+
+
+def ensure_file_assets_ai_description(engine: Engine) -> None:
+    """Add ai_description and ai_description_status to file_assets if missing."""
+    inspector = inspect(engine)
+    if not inspector.has_table("file_assets"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("file_assets")}
+    with engine.begin() as conn:
+        if "ai_description" not in cols:
+            conn.execute(text("ALTER TABLE file_assets ADD COLUMN ai_description TEXT"))
+            logger.info("Added file_assets.ai_description column")
+        if "ai_description_status" not in cols:
+            conn.execute(text("ALTER TABLE file_assets ADD COLUMN ai_description_status VARCHAR(20)"))
+            logger.info("Added file_assets.ai_description_status column")

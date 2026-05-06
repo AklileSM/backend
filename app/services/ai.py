@@ -1,5 +1,6 @@
 import base64
 import ipaddress
+import logging
 import mimetypes
 import re
 from typing import Any
@@ -12,6 +13,8 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models import FileAsset
 from app.services.storage import storage_service
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -95,15 +98,6 @@ async def analyze_image_url(
     file_id: str | None = None,
     db: Session | None = None,
 ) -> dict[str, Any]:
-    # Check DB-persisted cache first (survives restarts)
-    if file_id and db is not None:
-        asset = db.scalar(select(FileAsset).where(FileAsset.id == file_id))
-        if asset is not None:
-            cached = (asset.metadata_json or {}).get("ai_description")
-            if cached:
-                _cache[f"file:{file_id}"] = cached
-                return {"description": cached, "cached": True}
-
     async with httpx.AsyncClient(timeout=120) as client:
         vision_url, cache_key = await _resolve_vision_url(client, db, image_url, file_id)
 
@@ -191,11 +185,30 @@ async def analyze_image_url(
 
         _cache[cache_key] = description
 
-        # Persist to DB so the result survives backend restarts
-        if file_id and db is not None:
-            asset = db.scalar(select(FileAsset).where(FileAsset.id == file_id))
-            if asset is not None:
-                asset.metadata_json = {**(asset.metadata_json or {}), "ai_description": description}
-                db.commit()
-
         return {"description": description, "cached": False}
+
+
+async def generate_and_cache_ai_description(asset_id: str) -> None:
+    """Background task: call Vision API for an image asset and persist the result."""
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        result = await analyze_image_url("", file_id=asset_id, db=db)
+        asset = db.scalar(select(FileAsset).where(FileAsset.id == asset_id))
+        if asset is not None:
+            asset.ai_description = result["description"]
+            asset.ai_description_status = "done"
+            db.commit()
+    except Exception:
+        logger.exception("Background AI generation failed for asset %s", asset_id)
+        try:
+            db.rollback()
+            asset = db.scalar(select(FileAsset).where(FileAsset.id == asset_id))
+            if asset is not None:
+                asset.ai_description_status = "failed"
+                db.commit()
+        except Exception:
+            logger.exception("Could not mark asset %s as failed", asset_id)
+    finally:
+        db.close()

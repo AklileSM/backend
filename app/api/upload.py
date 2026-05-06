@@ -12,7 +12,7 @@ from datetime import date
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -21,6 +21,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.models import FileAsset, Room, User
 from app.schemas import UploadResponse
+from app.services.ai import generate_and_cache_ai_description
 from app.services.pointcloud import submit_conversion
 from app.services.storage import storage_service
 
@@ -568,6 +569,7 @@ async def upload_single(
     room_slug: str = Form(...),
     media_type: str = Form(...),
     capture_date: date = Form(...),
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_user_can_upload),
 ) -> UploadResponse:
@@ -680,10 +682,14 @@ async def upload_single(
                 "uploaded_by_user_id": current_user.id,
                 "uploaded_by_username": current_user.username,
             },
+            ai_description_status="generating" if media_type == "image" else None,
         )
         db.add(asset)
         db.commit()
         db.refresh(asset)
+
+        if media_type == "image":
+            background_tasks.add_task(generate_and_cache_ai_description, asset.id)
 
         return UploadResponse(
             id=asset.id,

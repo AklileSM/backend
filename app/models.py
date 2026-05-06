@@ -62,6 +62,8 @@ class FileAsset(Base):
     file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sha256_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    ai_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_description_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     room: Mapped[Room] = relationship(back_populates="files")
