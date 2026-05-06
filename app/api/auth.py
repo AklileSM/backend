@@ -17,20 +17,20 @@ def _to_public(user: User) -> UserPublic:
         id=user.id,
         username=user.username,
         email=user.email,
-        role=user.role,
+        is_admin=user.is_admin,
     )
 
 
 @router.post("/register", response_model=TokenResponse)
 def register(payload: UserRegisterRequest, db: Session = Depends(get_db)) -> TokenResponse:
     user_count = db.scalar(select(func.count()).select_from(User)) or 0
-    role = "admin" if user_count == 0 else "viewer"
+    is_admin = user_count == 0
 
     user = User(
         username=payload.username.strip(),
         email=payload.email.strip() if payload.email else None,
         password_hash=hash_password(payload.password),
-        role=role,
+        is_admin=is_admin,
     )
     db.add(user)
     try:
@@ -40,7 +40,7 @@ def register(payload: UserRegisterRequest, db: Session = Depends(get_db)) -> Tok
         db.rollback()
         raise HTTPException(status_code=400, detail="Username or email already registered") from None
 
-    token = create_access_token(subject=user.id, username=user.username, role=user.role)
+    token = create_access_token(subject=user.id, username=user.username, is_admin=user.is_admin)
     return TokenResponse(access_token=token, user=_to_public(user))
 
 
@@ -52,7 +52,7 @@ def login(payload: UserLoginRequest, db: Session = Depends(get_db)) -> TokenResp
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account disabled")
 
-    token = create_access_token(subject=user.id, username=user.username, role=user.role)
+    token = create_access_token(subject=user.id, username=user.username, is_admin=user.is_admin)
     return TokenResponse(access_token=token, user=_to_public(user))
 
 

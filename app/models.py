@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -14,9 +14,13 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str] = mapped_column(String(20), nullable=False, default="viewer")
-    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    project_memberships: Mapped[list["ProjectMember"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class Project(Base):
@@ -25,9 +29,38 @@ class Project(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    owner_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
 
+    owner: Mapped["User | None"] = relationship("User", foreign_keys="Project.owner_id")
     rooms: Mapped[list["Room"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    members: Mapped[list["ProjectMember"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class ProjectMember(Base):
+    __tablename__ = "project_members"
+
+    project_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="viewer")
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    project: Mapped[Project] = relationship(back_populates="members")
+    user: Mapped[User] = relationship(back_populates="project_memberships")
 
 
 class Room(Base):

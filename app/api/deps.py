@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import decode_access_token
 from app.database import get_db
-from app.models import User
+from app.models import ProjectMember, User
 
 security = HTTPBearer(auto_error=False)
 
@@ -33,7 +33,27 @@ def get_current_user(
     return user
 
 
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Administrator access required")
+    return current_user
+
+
 def require_user_can_upload(current_user: User = Depends(get_current_user)) -> User:
-    if current_user.role != "admin":
+    if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Only administrators can upload files")
     return current_user
+
+
+def get_project_member(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ProjectMember | None:
+    """Returns the ProjectMember record for the current user in the given project, or None."""
+    return db.scalar(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == current_user.id,
+        )
+    )

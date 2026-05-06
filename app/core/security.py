@@ -17,7 +17,7 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(*, subject: str, username: str, role: str) -> str:
+def create_access_token(*, subject: str, username: str, is_admin: bool) -> str:
     settings = get_settings()
     now = datetime.now(timezone.utc)
     expire = now + timedelta(minutes=settings.jwt_expire_minutes)
@@ -25,7 +25,7 @@ def create_access_token(*, subject: str, username: str, role: str) -> str:
     payload = {
         "sub": subject,
         "username": username,
-        "role": role,
+        "is_admin": is_admin,
         "exp": int(expire.timestamp()),
         "iat": int(now.timestamp()),
         "type": "access",

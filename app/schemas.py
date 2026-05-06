@@ -64,6 +64,58 @@ class ProjectResponse(BaseModel):
     id: str
     name: str
     slug: str
+    description: str | None = None
+    location: str | None = None
+    status: str = "active"
+    owner_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    slug: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
+    description: str | None = None
+    location: str | None = None
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    location: str | None = None
+    status: str | None = None
+
+
+class ProjectMemberResponse(BaseModel):
+    user_id: str
+    username: str
+    email: str | None
+    role: str
+    joined_at: datetime
+
+
+class ProjectMemberAddRequest(BaseModel):
+    user_id: str
+    role: str = Field(default="viewer", pattern=r"^(owner|editor|viewer)$")
+
+
+class ProjectMemberUpdateRequest(BaseModel):
+    role: str = Field(pattern=r"^(owner|editor|viewer)$")
+
+
+class AdminUserResponse(BaseModel):
+    id: str
+    username: str
+    email: str | None
+    is_admin: bool
+    is_active: bool
+    created_at: datetime
+
+
+class AdminUserUpdateRequest(BaseModel):
+    is_admin: bool | None = None
+    is_active: bool | None = None
+    email: str | None = None
 
 
 class RoomResponse(BaseModel):
@@ -199,7 +251,7 @@ class UserPublic(BaseModel):
     id: str
     username: str
     email: str | None
-    role: str
+    is_admin: bool
 
     model_config = {"from_attributes": True}
 

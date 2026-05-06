@@ -154,7 +154,7 @@ def _serialize_asset(asset: FileAsset) -> MediaFileResponse:
 
 
 def _can_delete_file(user: User, _asset: FileAsset) -> bool:
-    return user.role in ("admin", "manager")
+    return user.is_admin
 
 
 def _empty_group() -> RoomMediaGroup:
@@ -193,9 +193,9 @@ def list_my_uploads(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[MyUploadItemResponse]:
-    """Assets whose upload metadata records this user (admin/manager uploads)."""
-    if current_user.role not in ("admin", "manager"):
-        raise HTTPException(status_code=403, detail="Upload history is only available for admin and manager accounts")
+    """Assets whose upload metadata records this user."""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Upload history is only available for administrators")
 
     # Compare as text: cast(json)->>'uploaded_by_user_id' must match user id (plain cast(String) on JSON
     # values can include JSON quoting and fail to match).
