@@ -565,11 +565,11 @@ def complete_pointcloud_direct_upload(
 
 @router.post("/single", response_model=UploadResponse)
 async def upload_single(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     room_slug: str = Form(...),
     media_type: str = Form(...),
     capture_date: date = Form(...),
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_user_can_upload),
 ) -> UploadResponse:
