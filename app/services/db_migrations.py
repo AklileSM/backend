@@ -95,6 +95,34 @@ def ensure_projects_fields(engine: Engine) -> None:
             logger.info("Added projects.updated_at column")
 
 
+def ensure_project_floorplan_url(engine: Engine) -> None:
+    """Add floorplan_url to projects if missing."""
+    inspector = inspect(engine)
+    if not inspector.has_table("projects"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("projects")}
+    if "floorplan_url" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE projects ADD COLUMN floorplan_url VARCHAR(500)"))
+    logger.info("Added projects.floorplan_url column")
+
+
+def ensure_rooms_fields(engine: Engine) -> None:
+    """Add floor_plan_coordinates and sort_order to rooms if missing."""
+    inspector = inspect(engine)
+    if not inspector.has_table("rooms"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("rooms")}
+    with engine.begin() as conn:
+        if "floor_plan_coordinates" not in cols:
+            conn.execute(text("ALTER TABLE rooms ADD COLUMN floor_plan_coordinates JSON"))
+            logger.info("Added rooms.floor_plan_coordinates column")
+        if "sort_order" not in cols:
+            conn.execute(text("ALTER TABLE rooms ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"))
+            logger.info("Added rooms.sort_order column")
+
+
 def ensure_project_members_table(engine: Engine) -> None:
     """Create project_members table if it does not exist."""
     inspector = inspect(engine)

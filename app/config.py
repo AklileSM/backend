@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     minio_bucket_pointclouds: str = "construction-pointclouds"
     minio_bucket_pdfs: str = "construction-pdfs"
     minio_bucket_reports: str = "construction-reports"
+    minio_bucket_floorplans: str = "construction-floorplans"
     # Optional public URL for browser direct uploads (example: https://minio.example.com).
     # If empty, presigned URLs use minio_server as-is.
     minio_public_upload_base_url: str = ""

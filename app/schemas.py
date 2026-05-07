@@ -68,6 +68,7 @@ class ProjectResponse(BaseModel):
     location: str | None = None
     status: str = "active"
     owner_id: str | None = None
+    floorplan_url: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -123,6 +124,21 @@ class RoomResponse(BaseModel):
     name: str
     slug: str
     project_id: str
+    floor_plan_coordinates: dict | None = None
+    sort_order: int = 0
+
+
+class RoomCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    slug: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
+    sort_order: int = 0
+
+
+class RoomUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    slug: str | None = Field(default=None, min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
+    floor_plan_coordinates: dict | None = None
+    sort_order: int | None = None
 
 
 class AnalyzeImageRequest(BaseModel):

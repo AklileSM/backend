@@ -32,6 +32,7 @@ class StorageService:
             settings.minio_bucket_pointclouds,
             settings.minio_bucket_pdfs,
             settings.minio_bucket_reports,
+            settings.minio_bucket_floorplans,
         ):
             if not self.client.bucket_exists(bucket):
                 self.client.make_bucket(bucket)

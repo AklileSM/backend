@@ -1,13 +1,14 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_admin
+from app.config import get_settings
 from app.database import get_db
-from app.models import Project, ProjectMember, User
+from app.models import Project, ProjectMember, Room, User
 from app.schemas import (
     ProjectCreateRequest,
     ProjectMemberAddRequest,
@@ -15,12 +16,28 @@ from app.schemas import (
     ProjectMemberUpdateRequest,
     ProjectResponse,
     ProjectUpdateRequest,
+    RoomCreateRequest,
+    RoomResponse,
+    RoomUpdateRequest,
 )
+from app.services.storage import storage_service
 
 router = APIRouter()
+settings = get_settings()
+
+_ALLOWED_FLOORPLAN_TYPES = {"image/jpeg", "image/png", "image/webp"}
+_FLOORPLAN_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 
 
 def _project_to_response(p: Project) -> ProjectResponse:
+    floorplan_url: str | None = None
+    if p.floorplan_url:
+        try:
+            floorplan_url = storage_service.get_presigned_url(
+                settings.minio_bucket_floorplans, p.floorplan_url
+            )
+        except Exception:
+            floorplan_url = None
     return ProjectResponse(
         id=p.id,
         name=p.name,
@@ -29,8 +46,20 @@ def _project_to_response(p: Project) -> ProjectResponse:
         location=p.location,
         status=p.status,
         owner_id=p.owner_id,
+        floorplan_url=floorplan_url,
         created_at=p.created_at,
         updated_at=p.updated_at or p.created_at,
+    )
+
+
+def _room_to_response(r: Room) -> RoomResponse:
+    return RoomResponse(
+        id=r.id,
+        name=r.name,
+        slug=r.slug,
+        project_id=r.project_id,
+        floor_plan_coordinates=r.floor_plan_coordinates,
+        sort_order=r.sort_order,
     )
 
 
@@ -111,10 +140,26 @@ def create_project(
         db.rollback()
         raise HTTPException(status_code=400, detail="A project with that slug already exists") from None
 
-    # Creator automatically becomes owner-member
     db.add(ProjectMember(project_id=project.id, user_id=current_user.id, role="owner"))
     db.commit()
     db.refresh(project)
+    return _project_to_response(project)
+
+
+# ---------------------------------------------------------------------------
+# Slug-based lookup — must be defined before /{project_id}
+# ---------------------------------------------------------------------------
+
+@router.get("/by-slug/{slug}", response_model=ProjectResponse)
+def get_project_by_slug(
+    slug: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ProjectResponse:
+    project = db.scalar(select(Project).where(Project.slug == slug))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    _get_member_or_403(project.id, current_user, db)
     return _project_to_response(project)
 
 
@@ -159,6 +204,173 @@ def update_project(
     db.commit()
     db.refresh(project)
     return _project_to_response(project)
+
+
+# ---------------------------------------------------------------------------
+# Floorplan
+# ---------------------------------------------------------------------------
+
+@router.post("/{project_id}/floorplan", response_model=ProjectResponse)
+async def upload_floorplan(
+    project_id: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ProjectResponse:
+    project = _get_project_or_404(project_id, db)
+    member = _get_member_or_403(project_id, current_user, db)
+    if member is not None and member.role not in ("owner",):
+        raise HTTPException(status_code=403, detail="Only project owners can upload a floorplan")
+
+    content_type = file.content_type or "image/jpeg"
+    if content_type not in _ALLOWED_FLOORPLAN_TYPES:
+        raise HTTPException(status_code=400, detail="Floorplan must be JPEG, PNG, or WebP")
+
+    ext = _FLOORPLAN_EXT.get(content_type, ".jpg")
+    object_name = f"{project_id}/floorplan{ext}"
+
+    data = await file.read()
+    storage_service.upload_bytes(
+        bucket_name=settings.minio_bucket_floorplans,
+        object_name=object_name,
+        data=data,
+        content_type=content_type,
+    )
+
+    if project.floorplan_url and project.floorplan_url != object_name:
+        storage_service.remove_object_best_effort(settings.minio_bucket_floorplans, project.floorplan_url)
+
+    project.floorplan_url = object_name
+    project.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(project)
+    return _project_to_response(project)
+
+
+@router.delete("/{project_id}/floorplan", response_model=ProjectResponse)
+def delete_floorplan(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ProjectResponse:
+    project = _get_project_or_404(project_id, db)
+    member = _get_member_or_403(project_id, current_user, db)
+    if member is not None and member.role not in ("owner",):
+        raise HTTPException(status_code=403, detail="Only project owners can remove the floorplan")
+
+    if project.floorplan_url:
+        storage_service.remove_object_best_effort(settings.minio_bucket_floorplans, project.floorplan_url)
+        project.floorplan_url = None
+        project.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(project)
+    return _project_to_response(project)
+
+
+# ---------------------------------------------------------------------------
+# Rooms
+# ---------------------------------------------------------------------------
+
+@router.get("/{project_id}/rooms", response_model=list[RoomResponse])
+def list_project_rooms(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[RoomResponse]:
+    _get_project_or_404(project_id, db)
+    _get_member_or_403(project_id, current_user, db)
+    rooms = db.scalars(
+        select(Room)
+        .where(Room.project_id == project_id)
+        .order_by(Room.sort_order.asc(), Room.name.asc())
+    ).all()
+    return [_room_to_response(r) for r in rooms]
+
+
+@router.post("/{project_id}/rooms", response_model=RoomResponse, status_code=201)
+def create_room(
+    project_id: str,
+    payload: RoomCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RoomResponse:
+    _get_project_or_404(project_id, db)
+    member = _get_member_or_403(project_id, current_user, db)
+    if member is not None and member.role not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="Only owners and editors can create rooms")
+
+    room = Room(
+        project_id=project_id,
+        name=payload.name.strip(),
+        slug=payload.slug.strip(),
+        sort_order=payload.sort_order,
+    )
+    db.add(room)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="A room with that slug already exists") from None
+    db.commit()
+    db.refresh(room)
+    return _room_to_response(room)
+
+
+@router.patch("/{project_id}/rooms/{room_id}", response_model=RoomResponse)
+def update_room(
+    project_id: str,
+    room_id: str,
+    payload: RoomUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RoomResponse:
+    _get_project_or_404(project_id, db)
+    member = _get_member_or_403(project_id, current_user, db)
+    if member is not None and member.role not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="Only owners and editors can update rooms")
+
+    room = db.scalar(
+        select(Room).where(Room.id == room_id, Room.project_id == project_id)
+    )
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    if payload.name is not None:
+        room.name = payload.name.strip()
+    if payload.slug is not None:
+        room.slug = payload.slug.strip()
+    if payload.floor_plan_coordinates is not None:
+        room.floor_plan_coordinates = payload.floor_plan_coordinates
+    if payload.sort_order is not None:
+        room.sort_order = payload.sort_order
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="A room with that slug already exists") from None
+    db.refresh(room)
+    return _room_to_response(room)
+
+
+@router.delete("/{project_id}/rooms/{room_id}", status_code=204)
+def delete_room(
+    project_id: str,
+    room_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    _get_project_or_404(project_id, db)
+    member = _get_member_or_403(project_id, current_user, db)
+    if member is not None and member.role not in ("owner",):
+        raise HTTPException(status_code=403, detail="Only project owners can delete rooms")
+
+    room = db.scalar(
+        select(Room).where(Room.id == room_id, Room.project_id == project_id)
+    )
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+    db.delete(room)
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +422,6 @@ def add_member(
     db.add(new_member)
     db.commit()
     db.refresh(new_member)
-    # Load the user relationship for the response
     new_member.user = target_user
     return _member_to_response(new_member)
 
