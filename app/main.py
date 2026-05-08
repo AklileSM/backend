@@ -66,6 +66,10 @@ app = FastAPI(
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
     lifespan=lifespan,
+    # Disable automatic trailing-slash redirects. Without this, FastAPI generates
+    # absolute 307 redirects (e.g. http://backend:3001/api/reports/) that the
+    # browser cannot resolve when accessed through the Next.js rewrite proxy.
+    redirect_slashes=False,
 )
 
 app.add_middleware(
