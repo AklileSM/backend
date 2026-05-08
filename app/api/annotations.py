@@ -24,6 +24,7 @@ def list_annotations(file_id: str, db: Session = Depends(get_db)) -> list[Annota
     ]
 
 
+@router.post("", response_model=AnnotationResponse)
 @router.post("/", response_model=AnnotationResponse)
 def create_annotation(payload: AnnotationCreateRequest, db: Session = Depends(get_db)) -> AnnotationResponse:
     file_asset = db.scalar(select(FileAsset).where(FileAsset.id == payload.file_id))

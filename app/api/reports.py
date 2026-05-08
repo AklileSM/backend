@@ -247,6 +247,7 @@ def _parse_state_json(state_json: str | None) -> dict | None:
     return data
 
 
+@router.get("", response_model=list[ReportResponse])
 @router.get("/", response_model=list[ReportResponse])
 def list_reports(
     db: Session = Depends(get_db),
@@ -343,6 +344,7 @@ def get_report_pdf(
     )
 
 
+@router.post("", response_model=ReportResponse)
 @router.post("/", response_model=ReportResponse)
 def create_report(
     payload: ReportCreateRequest,
