@@ -212,7 +212,10 @@ def _save_pointcloud_asset_and_queue_conversion(
             db.commit()
         except Exception:
             pass
-        raise RuntimeError(f"Failed to queue conversion: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to queue conversion: {exc}",
+        ) from exc
 
     return UploadResponse(
         id=asset.id,
