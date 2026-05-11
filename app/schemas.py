@@ -243,6 +243,10 @@ class AnnotationCreateRequest(BaseModel):
     annotation_type: str
     data: dict[str, Any]
 
+class AnnotationUpdateRequest(BaseModel):
+    annotation_type: str | None = None
+    data: dict[str, Any] | None = None
+
 
 class AnnotationResponse(BaseModel):
     id: str
