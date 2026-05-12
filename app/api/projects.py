@@ -121,7 +121,7 @@ def list_projects(
 @router.post("/", response_model=ProjectResponse, status_code=201)
 def create_project(
     payload: ProjectCreateRequest,
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ProjectResponse:
     project = Project(
