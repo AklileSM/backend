@@ -123,6 +123,53 @@ def ensure_rooms_fields(engine: Engine) -> None:
             logger.info("Added rooms.sort_order column")
 
 
+def ensure_rooms_slug_scoped_to_project(engine: Engine) -> None:
+    """Replace the global UNIQUE(slug) constraint on rooms with UNIQUE(project_id, slug)."""
+    inspector = inspect(engine)
+    if not inspector.has_table("rooms"):
+        return
+
+    unique_constraints = inspector.get_unique_constraints("rooms")
+    has_composite = any(
+        set(c["column_names"]) == {"project_id", "slug"}
+        for c in unique_constraints
+    )
+    if has_composite:
+        return
+
+    dialect = engine.dialect.name
+    with engine.begin() as conn:
+        if dialect == "postgresql":
+            conn.execute(text("ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_slug_key"))
+            conn.execute(text("DROP INDEX IF EXISTS ix_rooms_slug"))
+            conn.execute(text(
+                "ALTER TABLE rooms ADD CONSTRAINT uq_rooms_project_slug UNIQUE (project_id, slug)"
+            ))
+        elif dialect == "sqlite":
+            # SQLite cannot drop constraints — recreate the table with the correct definition.
+            conn.execute(text("""
+                CREATE TABLE rooms_new (
+                    id VARCHAR(36) PRIMARY KEY,
+                    project_id VARCHAR(36) NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    name VARCHAR(255) NOT NULL,
+                    slug VARCHAR(100) NOT NULL,
+                    floor_plan_coordinates JSON,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (project_id, slug)
+                )
+            """))
+            conn.execute(text("INSERT INTO rooms_new SELECT * FROM rooms"))
+            conn.execute(text("DROP TABLE rooms"))
+            conn.execute(text("ALTER TABLE rooms_new RENAME TO rooms"))
+        else:
+            conn.execute(text("ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_slug_key"))
+            conn.execute(text(
+                "ALTER TABLE rooms ADD CONSTRAINT uq_rooms_project_slug UNIQUE (project_id, slug)"
+            ))
+    logger.info("Updated rooms slug uniqueness constraint to be scoped per project")
+
+
 def ensure_project_members_table(engine: Engine) -> None:
     """Create project_members table if it does not exist."""
     inspector = inspect(engine)

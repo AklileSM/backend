@@ -116,8 +116,8 @@ def _generate_display_name(
     return f"{room.slug}-{compact_date}-{seq:03d}{ext}"
 
 
-def _build_object_name(room_slug: str, capture_date: date, display_name: str) -> str:
-    return f"{room_slug}/{capture_date.isoformat()}/{display_name}"
+def _build_object_name(room_id: str, capture_date: date, display_name: str) -> str:
+    return f"{room_id}/{capture_date.isoformat()}/{display_name}"
 
 
 def _bucket_for_media_type(media_type: str) -> str:
@@ -228,7 +228,7 @@ def _save_pointcloud_asset_and_queue_conversion(
 
 @router.post("/pointcloud/init")
 def init_pointcloud_upload(
-    room_slug: str = Form(...),
+    room_id: str = Form(...),
     capture_date: date = Form(...),
     filename: str = Form(...),
     file_size: int = Form(...),
@@ -236,7 +236,7 @@ def init_pointcloud_upload(
     db: Session = Depends(get_db),
     _: User = Depends(require_user_can_upload),
 ) -> dict[str, str | int]:
-    room = db.scalar(select(Room).where(Room.slug == room_slug))
+    room = db.scalar(select(Room).where(Room.id == room_id))
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
     if file_size <= 0:
@@ -252,7 +252,7 @@ def init_pointcloud_upload(
     manifest.write_text(
         "\n".join(
             [
-                f"room_slug={room_slug}",
+                f"room_id={room_id}",
                 f"capture_date={capture_date.isoformat()}",
                 f"filename={safe_name}",
                 f"file_size={file_size}",
@@ -267,7 +267,7 @@ def init_pointcloud_upload(
 
 @router.post("/pointcloud/direct-init")
 def init_pointcloud_direct_upload(
-    room_slug: str = Form(...),
+    room_id: str = Form(...),
     capture_date: date = Form(...),
     filename: str = Form(...),
     file_size: int = Form(...),
@@ -281,7 +281,7 @@ def init_pointcloud_direct_upload(
             detail="Direct upload not available: MINIO_PUBLIC_UPLOAD_BASE_URL is not configured.",
         )
 
-    room = db.scalar(select(Room).where(Room.slug == room_slug))
+    room = db.scalar(select(Room).where(Room.id == room_id))
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
     if file_size <= 0:
@@ -299,14 +299,14 @@ def init_pointcloud_direct_upload(
         original_filename=safe_name,
         db=db,
     )
-    object_name = _build_object_name(room.slug, capture_date, display_name)
+    object_name = _build_object_name(room.id, capture_date, display_name)
     bucket_name = _bucket_for_media_type("pointcloud")
     upload_dir = _pointcloud_upload_path(upload_id)
     upload_dir.mkdir(parents=True, exist_ok=False)
     (upload_dir / "manifest.txt").write_text(
         "\n".join(
             [
-                f"room_slug={room_slug}",
+                f"room_id={room_id}",
                 f"capture_date={capture_date.isoformat()}",
                 f"filename={safe_name}",
                 f"file_size={file_size}",
@@ -363,8 +363,8 @@ def complete_pointcloud_upload(
 
     meta = _read_upload_manifest(manifest)
 
-    room_slug = meta.get("room_slug", "")
-    room = db.scalar(select(Room).where(Room.slug == room_slug))
+    room_id = meta.get("room_id", "")
+    room = db.scalar(select(Room).where(Room.id == room_id))
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
 
@@ -383,7 +383,7 @@ def complete_pointcloud_upload(
         original_filename=original_filename,
         db=db,
     )
-    object_name = _build_object_name(room.slug, capture_date, display_name)
+    object_name = _build_object_name(room.id, capture_date, display_name)
     bucket_name = _bucket_for_media_type("pointcloud")
     extension = os.path.splitext(original_filename)[1]
 
@@ -472,8 +472,8 @@ def complete_pointcloud_direct_upload(
 
     try:
         meta = _read_upload_manifest(manifest)
-        room_slug = meta.get("room_slug", "")
-        room = db.scalar(select(Room).where(Room.slug == room_slug))
+        room_id = meta.get("room_id", "")
+        room = db.scalar(select(Room).where(Room.id == room_id))
         if room is None:
             raise HTTPException(status_code=404, detail="Room not found")
 
@@ -570,7 +570,7 @@ def complete_pointcloud_direct_upload(
 async def upload_single(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    room_slug: str = Form(...),
+    room_id: str = Form(...),
     media_type: str = Form(...),
     capture_date: date = Form(...),
     db: Session = Depends(get_db),
@@ -579,7 +579,7 @@ async def upload_single(
     if media_type not in _ALLOWED_MEDIA:
         raise HTTPException(status_code=400, detail="Invalid media_type")
 
-    room = db.scalar(select(Room).where(Room.slug == room_slug))
+    room = db.scalar(select(Room).where(Room.id == room_id))
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
 
@@ -605,7 +605,7 @@ async def upload_single(
         original_filename=file.filename or "",
         db=db,
     )
-    object_name = _build_object_name(room.slug, capture_date, display_name)
+    object_name = _build_object_name(room.id, capture_date, display_name)
     bucket_name = _bucket_for_media_type(media_type)
     extension = os.path.splitext(display_name)[1]
 
@@ -654,7 +654,7 @@ async def upload_single(
         if media_type == "image" and content_type.startswith("image/"):
             thumbnail_bucket_name = settings.minio_bucket_thumbnails
             thumbnail_object_name = (
-                f"{room.slug}/{capture_date.isoformat()}/thumb-{uuid.uuid4().hex}.jpg"
+                f"{room.id}/{capture_date.isoformat()}/thumb-{uuid.uuid4().hex}.jpg"
             )
             with open(tmp_path, "rb") as f:
                 raw = f.read()

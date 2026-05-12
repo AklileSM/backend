@@ -17,6 +17,7 @@ from app.services.db_migrations import (
     ensure_project_members_table,
     ensure_projects_fields,
     ensure_rooms_fields,
+    ensure_rooms_slug_scoped_to_project,
     ensure_users_is_admin,
 )
 from app.services.pointcloud import init_converter_pool, reset_interrupted_conversions, shutdown_converter_pool
@@ -48,6 +49,7 @@ async def lifespan(_: FastAPI):
     ensure_project_members_table(engine)
     ensure_project_floorplan_url(engine)
     ensure_rooms_fields(engine)
+    ensure_rooms_slug_scoped_to_project(engine)
     with SessionLocal() as db:
         db.execute(text("SELECT 1"))
         seed_defaults(db)

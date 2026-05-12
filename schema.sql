@@ -9,10 +9,11 @@ CREATE TABLE IF NOT EXISTS rooms (
     id VARCHAR(36) PRIMARY KEY,
     project_id VARCHAR(36) NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
-    slug VARCHAR(100) UNIQUE NOT NULL,
+    slug VARCHAR(100) NOT NULL,
     floor_plan_coordinates JSON,
     sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (project_id, slug)
 );
 
 CREATE TABLE IF NOT EXISTS file_assets (
@@ -66,7 +67,7 @@ CREATE TABLE IF NOT EXISTS annotations (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS ix_rooms_slug ON rooms(slug);
+CREATE INDEX IF NOT EXISTS ix_rooms_project_id ON rooms(project_id);
 CREATE INDEX IF NOT EXISTS ix_file_assets_room_id ON file_assets(room_id);
 CREATE INDEX IF NOT EXISTS ix_file_assets_capture_date ON file_assets(capture_date);
 CREATE INDEX IF NOT EXISTS ix_file_assets_media_type ON file_assets(media_type);
