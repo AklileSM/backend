@@ -19,6 +19,7 @@ from app.services.db_migrations import (
     ensure_rooms_fields,
     ensure_rooms_slug_scoped_to_project,
     ensure_users_is_admin,
+    ensure_users_role_dropped,
 )
 from app.services.pointcloud import init_converter_pool, reset_interrupted_conversions, shutdown_converter_pool
 from app.services.storage import storage_service
@@ -45,6 +46,7 @@ async def lifespan(_: FastAPI):
     ensure_file_assets_sha256_hash(engine)
     ensure_file_assets_ai_description(engine)
     ensure_users_is_admin(engine)
+    ensure_users_role_dropped(engine)
     ensure_projects_fields(engine)
     ensure_project_members_table(engine)
     ensure_project_floorplan_url(engine)

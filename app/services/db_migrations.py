@@ -170,6 +170,19 @@ def ensure_rooms_slug_scoped_to_project(engine: Engine) -> None:
     logger.info("Updated rooms slug uniqueness constraint to be scoped per project")
 
 
+def ensure_users_role_dropped(engine: Engine) -> None:
+    """Drop the legacy users.role column now that is_admin boolean is in use."""
+    inspector = inspect(engine)
+    if not inspector.has_table("users"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("users")}
+    if "role" not in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users DROP COLUMN role"))
+    logger.info("Dropped legacy users.role column")
+
+
 def ensure_project_members_table(engine: Engine) -> None:
     """Create project_members table if it does not exist."""
     inspector = inspect(engine)
