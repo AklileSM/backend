@@ -206,6 +206,20 @@ def update_project(
     return _project_to_response(project)
 
 
+@router.delete("/{project_id}", status_code=204)
+def delete_project(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    project = _get_project_or_404(project_id, db)
+    member = _get_member_or_403(project_id, current_user, db)
+    if member is not None and member.role != "owner":
+        raise HTTPException(status_code=403, detail="Only project owners can delete projects")
+    db.delete(project)
+    db.commit()
+
+
 # ---------------------------------------------------------------------------
 # Floorplan
 # ---------------------------------------------------------------------------
