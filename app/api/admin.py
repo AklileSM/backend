@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_admin
+from app.api.deps import get_current_user, require_admin
 from app.database import get_db
 from app.models import Project, User
 from app.schemas import (
@@ -45,6 +45,25 @@ def list_users(
     db: Session = Depends(get_db),
 ) -> list[AdminUserResponse]:
     users = db.scalars(select(User).order_by(User.created_at.asc())).all()
+    return [_user_to_admin_response(u) for u in users]
+
+
+@router.get("/user-search", response_model=list[AdminUserResponse])
+def search_users(
+    q: str = Query(..., min_length=1),
+    _: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[AdminUserResponse]:
+    like = f"%{q}%"
+    users = db.scalars(
+        select(User)
+        .where(
+            User.is_active == True,  # noqa: E712
+            or_(User.username.ilike(like), User.email.ilike(like)),
+        )
+        .order_by(User.username.asc())
+        .limit(10)
+    ).all()
     return [_user_to_admin_response(u) for u in users]
 
 
