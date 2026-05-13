@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.deps import get_current_user, require_user_can_upload
 from app.services.pointcloud import submit_conversion
 from app.database import get_db
-from app.models import FileAsset, Room, User
+from app.models import FileAsset, ProjectMember, Room, User
 from app.schemas import (
     DateMediaCounts,
     ExplorerByDateResponse,
@@ -153,8 +153,19 @@ def _serialize_asset(asset: FileAsset) -> MediaFileResponse:
     )
 
 
-def _can_delete_file(user: User, _asset: FileAsset) -> bool:
-    return user.is_admin
+def _can_delete_file(user: User, asset: FileAsset, db: Session) -> bool:
+    if user.is_admin:
+        return True
+    room = db.scalar(select(Room).where(Room.id == asset.room_id))
+    if room is None:
+        return False
+    member = db.scalar(
+        select(ProjectMember).where(
+            ProjectMember.project_id == room.project_id,
+            ProjectMember.user_id == user.id,
+        )
+    )
+    return member is not None and member.role in ("owner", "editor")
 
 
 def _empty_group() -> RoomMediaGroup:
@@ -280,7 +291,7 @@ def delete_file_asset(
     asset = db.scalar(select(FileAsset).where(FileAsset.id == file_id))
     if asset is None:
         raise HTTPException(status_code=404, detail="File not found")
-    if not _can_delete_file(current_user, asset):
+    if not _can_delete_file(current_user, asset, db):
         raise HTTPException(status_code=403, detail="Not allowed to delete this file")
 
     if asset.thumbnail_bucket_name and asset.thumbnail_object_name:

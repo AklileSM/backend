@@ -187,8 +187,8 @@ def update_project(
 ) -> ProjectResponse:
     project = _get_project_or_404(project_id, db)
     member = _get_member_or_403(project_id, current_user, db)
-    if member is not None and member.role not in ("owner", "editor"):
-        raise HTTPException(status_code=403, detail="Only project owners and editors can update the project")
+    if member is not None and member.role != "owner":
+        raise HTTPException(status_code=403, detail="Only project owners can update the project")
 
     if payload.name is not None:
         project.name = payload.name.strip()
@@ -233,8 +233,8 @@ async def upload_floorplan(
 ) -> ProjectResponse:
     project = _get_project_or_404(project_id, db)
     member = _get_member_or_403(project_id, current_user, db)
-    if member is not None and member.role not in ("owner",):
-        raise HTTPException(status_code=403, detail="Only project owners can upload a floorplan")
+    if member is not None and member.role not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="Only project owners and editors can upload a floorplan")
 
     content_type = file.content_type or "image/jpeg"
     if content_type not in _ALLOWED_FLOORPLAN_TYPES:
@@ -269,8 +269,8 @@ def delete_floorplan(
 ) -> ProjectResponse:
     project = _get_project_or_404(project_id, db)
     member = _get_member_or_403(project_id, current_user, db)
-    if member is not None and member.role not in ("owner",):
-        raise HTTPException(status_code=403, detail="Only project owners can remove the floorplan")
+    if member is not None and member.role not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="Only project owners and editors can remove the floorplan")
 
     if project.floorplan_url:
         storage_service.remove_object_best_effort(settings.minio_bucket_floorplans, project.floorplan_url)
@@ -375,8 +375,8 @@ def delete_room(
 ) -> None:
     _get_project_or_404(project_id, db)
     member = _get_member_or_403(project_id, current_user, db)
-    if member is not None and member.role not in ("owner",):
-        raise HTTPException(status_code=403, detail="Only project owners can delete rooms")
+    if member is not None and member.role not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="Only project owners and editors can delete rooms")
 
     room = db.scalar(
         select(Room).where(Room.id == room_id, Room.project_id == project_id)

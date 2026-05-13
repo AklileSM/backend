@@ -16,10 +16,10 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.api.deps import require_user_can_upload
+from app.api.deps import get_current_user, require_user_can_upload
 from app.config import get_settings
 from app.database import get_db
-from app.models import FileAsset, Room, User
+from app.models import FileAsset, ProjectMember, Room, User
 from app.schemas import UploadResponse
 from app.services.ai import generate_and_cache_ai_description
 from app.services.pointcloud import submit_conversion
@@ -62,6 +62,19 @@ _CANONICAL_EXTENSION: dict[str, str] = {
     "pointcloud": ".laz",
     "pdf": ".pdf",
 }
+
+
+def _require_can_upload(user: User, room: Room, db: Session) -> None:
+    if user.is_admin:
+        return
+    member = db.scalar(
+        select(ProjectMember).where(
+            ProjectMember.project_id == room.project_id,
+            ProjectMember.user_id == user.id,
+        )
+    )
+    if member is None or member.role not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="Only project owners and editors can upload files")
 
 
 def _ext_from_content_type(content_type: str, fallback: str) -> str:
@@ -234,11 +247,12 @@ def init_pointcloud_upload(
     file_size: int = Form(...),
     content_type: str = Form("application/octet-stream"),
     db: Session = Depends(get_db),
-    _: User = Depends(require_user_can_upload),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, str | int]:
     room = db.scalar(select(Room).where(Room.id == room_id))
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
+    _require_can_upload(current_user, room, db)
     if file_size <= 0:
         raise HTTPException(status_code=400, detail="Invalid file size")
     if file_size > settings.max_upload_size_bytes:
@@ -273,7 +287,7 @@ def init_pointcloud_direct_upload(
     file_size: int = Form(...),
     content_type: str = Form("application/octet-stream"),
     db: Session = Depends(get_db),
-    _: User = Depends(require_user_can_upload),
+    current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
     if not settings.minio_public_upload_base_url.strip():
         raise HTTPException(
@@ -284,6 +298,7 @@ def init_pointcloud_direct_upload(
     room = db.scalar(select(Room).where(Room.id == room_id))
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
+    _require_can_upload(current_user, room, db)
     if file_size <= 0:
         raise HTTPException(status_code=400, detail="Invalid file size")
     if file_size > settings.max_upload_size_bytes:
@@ -327,7 +342,7 @@ async def upload_pointcloud_chunk(
     upload_id: str = Form(...),
     chunk_index: int = Form(...),
     chunk: UploadFile = File(...),
-    _: User = Depends(require_user_can_upload),
+    _: User = Depends(get_current_user),
 ) -> dict[str, bool | int]:
     if chunk_index < 0:
         raise HTTPException(status_code=400, detail="Invalid chunk index")
@@ -352,7 +367,7 @@ def complete_pointcloud_upload(
     upload_id: str = Form(...),
     total_chunks: int = Form(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_user_can_upload),
+    current_user: User = Depends(get_current_user),
 ) -> UploadResponse:
     if total_chunks <= 0:
         raise HTTPException(status_code=400, detail="Invalid total chunk count")
@@ -463,7 +478,7 @@ def complete_pointcloud_upload(
 def complete_pointcloud_direct_upload(
     upload_id: str = Form(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_user_can_upload),
+    current_user: User = Depends(get_current_user),
 ) -> UploadResponse:
     upload_dir = _pointcloud_upload_path(upload_id)
     manifest = upload_dir / "manifest.txt"
@@ -574,7 +589,7 @@ async def upload_single(
     media_type: str = Form(...),
     capture_date: date = Form(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_user_can_upload),
+    current_user: User = Depends(get_current_user),
 ) -> UploadResponse:
     if media_type not in _ALLOWED_MEDIA:
         raise HTTPException(status_code=400, detail="Invalid media_type")
@@ -582,6 +597,7 @@ async def upload_single(
     room = db.scalar(select(Room).where(Room.id == room_id))
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
+    _require_can_upload(current_user, room, db)
 
     if media_type == "pdf":
         fn = (file.filename or "").lower()
