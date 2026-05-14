@@ -1,4 +1,41 @@
-"""Lightweight additive migrations for existing deployments (create_all does not ALTER)."""
+"""Lightweight additive schema migrations for existing deployments.
+
+Why this exists
+---------------
+SQLAlchemy's Base.metadata.create_all() only creates *missing* tables, it
+never ALTERs existing ones. So when a new column or constraint is added to a
+model after the table already exists in production, create_all silently skips
+it. These functions fill that gap by inspecting the live schema and applying
+only the missing change.
+
+All functions are idempotent: safe to run on every startup regardless of how
+many times the server has been restarted or what state the schema is in.
+
+Execution order
+---------------
+Functions are called in main.py's lifespan() hook in this order, after
+create_all and before seeding:
+
+  1. ensure_comparison_drafts_state_json
+  2. ensure_file_assets_sha256_hash
+  3. ensure_file_assets_ai_description
+  4. ensure_users_is_admin
+  5. ensure_users_role_dropped          ← must run after (4)
+  6. ensure_projects_fields
+  7. ensure_project_members_table
+  8. ensure_project_floorplan_url
+  9. ensure_rooms_fields
+  10. ensure_rooms_slug_scoped_to_project
+
+How to add a new migration
+--------------------------
+1. Write a new ``ensure_<table>_<change>(engine)`` function here following the
+   existing pattern: inspect, return early if already done, ALTER inside a
+   transaction, log at INFO level.
+2. Import and call it in app/main.py's lifespan() after the existing calls.
+3. Do NOT rely on ordering relative to create_all for tables that may not exist
+   yet — guard with ``if not inspector.has_table(...): return``.
+"""
 
 import logging
 

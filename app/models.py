@@ -8,6 +8,15 @@ from app.database import Base
 
 
 class User(Base):
+    """Application user account.
+
+    The first account registered via POST /api/auth/register is automatically
+    granted is_admin=True; all subsequent registrations get is_admin=False.
+
+    is_active=False disables login without deleting the account — the user's
+    uploads and reports remain intact. Set via the admin panel.
+    """
+
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -24,6 +33,19 @@ class User(Base):
 
 
 class Project(Base):
+    """A construction project that groups rooms and files.
+
+    slug is the stable URL identifier (e.g. "a6-stern"). It must be globally
+    unique and is used in frontend routes.
+
+    owner_id uses SET NULL on delete so the project survives if the owning user
+    is removed. Global admins have implicit access regardless of membership.
+
+    status is typically "active" or "archived"; the frontend filters on this.
+    floorplan_url points to a presigned MinIO URL for the floor plan image used
+    as the backdrop in the room-picker UI.
+    """
+
     __tablename__ = "projects"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -49,6 +71,17 @@ class Project(Base):
 
 
 class ProjectMember(Base):
+    """Many-to-many link between users and projects with a role.
+
+    role must be one of: "owner" | "editor" | "viewer"
+      owner  — can manage project settings, members, and upload files
+      editor — can upload files, create annotations and reports
+      viewer — read-only access to all project content
+
+    Global admins bypass this table entirely and have implicit owner-level
+    access to every project.
+    """
+
     __tablename__ = "project_members"
 
     project_id: Mapped[str] = mapped_column(
@@ -65,6 +98,19 @@ class ProjectMember(Base):
 
 
 class Room(Base):
+    """A named location within a project (e.g. "Ground Floor", "Room 3").
+
+    slug is scoped per project, two different projects may have a room with
+    the same slug. The unique constraint is (project_id, slug).
+
+    floor_plan_coordinates is a JSON object that records where this room's
+    marker sits on the project's floor plan image, used by the room-picker UI.
+    Shape: {"x": float, "y": float} as fractions of the image dimensions.
+
+    sort_order controls the display order in the sidebar and explorer.
+    Lower values appear first; default is 0 (insertion order within a tie).
+    """
+
     __tablename__ = "rooms"
     __table_args__ = (UniqueConstraint("project_id", "slug", name="uq_rooms_project_slug"),)
 
@@ -81,6 +127,35 @@ class Room(Base):
 
 
 class FileAsset(Base):
+    """An uploaded file stored in MinIO with its metadata in the DB.
+
+    media_type is one of: "image" | "video" | "pointcloud" | "pdf"
+
+    display_name is the canonical filename in the format <room-slug>-<YYYYMMDD>-<NNN>.<ext>
+    (e.g. "room3-20260329-001.jpg"). original_name preserves what the user uploaded.
+
+    object_name is the MinIO key within bucket_name, structured as:
+      <room_id>/<capture_date>/<display_name>
+
+    sha256_hash enables system-wide duplicate detection: the same file cannot
+    be uploaded twice even to a different room or project (409 on conflict).
+
+    metadata_json carries upload provenance and type-specific state:
+      - All types: {"uploaded_by_user_id": str, "uploaded_by_username": str}
+      - Point clouds additionally: {
+            "conversion_status": "pending" | "processing" | "ready" | "failed",
+            "conversion_error": str,          # present only on failure
+            "potree_base_object": str,         # MinIO key prefix for Potree files
+            "original_removed_after_conversion": bool
+        }
+
+    ai_description_status tracks async AI analysis: "generating" → null (done) or
+    stored in ai_description. Only populated for images.
+
+    thumbnail_bucket_name / thumbnail_object_name are set for images only; the
+    thumbnail is a 400×300 JPEG auto-generated at upload time.
+    """
+
     __tablename__ = "file_assets"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -113,6 +188,22 @@ class FileAsset(Base):
 
 
 class ComparisonDraft(Base):
+    """In-progress report from the Compare viewer (two images side-by-side).
+
+    state_json holds the viewer's serialised state at save time:
+      {
+        "leftFileId": str,
+        "rightFileId": str,
+        "screenshots": [{"dataUrl": str, "label": str}, ...],
+        "cameraA": {...},   # optional Three.js camera state
+        "cameraB": {...}
+      }
+
+    flags is a list of string tags chosen by the reporter (e.g. ["crack", "water"]).
+    pdf_bucket_name / pdf_object_name point to the generated PDF in MinIO.
+    created_by stores the uploader's username (denormalised for display).
+    """
+
     __tablename__ = "comparison_drafts"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -129,7 +220,21 @@ class ComparisonDraft(Base):
 
 
 class ViewerReportDraft(Base):
-    """Field-observation drafts from Static / Interactive / PCD viewers (not Compare)."""
+    """In-progress report from a single-file viewer (not the Compare viewer).
+
+    viewer_kind identifies which viewer produced this draft:
+      "static"      — standard image viewer
+      "panorama"    — 360° panorama (Three.js sphere)
+      "pointcloud"  — Potree point cloud viewer
+      "pdf"         — PDF.js document viewer
+
+    state_json holds viewer-specific serialised state (camera position,
+    screenshots, active page number, etc.). Schema varies by viewer_kind;
+    see frontend-next/VIEWERS.md for the full shapes.
+
+    flags and pdf_bucket_name / pdf_object_name behave the same as in
+    ComparisonDraft. created_by stores the uploader's username.
+    """
 
     __tablename__ = "viewer_report_drafts"
 
@@ -148,6 +253,23 @@ class ViewerReportDraft(Base):
 
 
 class Report(Base):
+    """A published (finalised) field-observation report attached to a file.
+
+    Unlike drafts (ComparisonDraft, ViewerReportDraft), a Report is considered
+    immutable once created. The frontend uses the presence of a Report to show
+    the "Published" badge on a file card.
+
+    screenshots is a list of base64-encoded JPEG data-URLs captured by the
+    viewer at publish time (embedded directly in the PDF).
+
+    pdf_bucket_name / pdf_object_name are nullable: they are populated only
+    after the PDF generation background task completes. A null pdf_object_name
+    means the report is saved but the PDF is not ready yet.
+
+    ai_description is copied from FileAsset.ai_description at publish time so
+    the report PDF captures the analysis that existed when the report was filed.
+    """
+
     __tablename__ = "reports"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -165,6 +287,20 @@ class Report(Base):
 
 
 class Annotation(Base):
+    """A spatial annotation attached to a file (pin, polygon, measurement, etc.).
+
+    annotation_type identifies the shape kind; data holds its coordinates and
+    label. Both are defined by the frontend viewer — the backend stores them
+    opaquely without validating the schema.
+
+    Common annotation_type values:
+      "pin"       — {"x": float, "y": float, "label": str}
+      "polygon"   — {"points": [[x, y], ...], "label": str}
+      "distance"  — {"start": [x, y], "end": [x, y], "metres": float}
+
+    Annotations cascade-delete when their parent FileAsset is deleted.
+    """
+
     __tablename__ = "annotations"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))

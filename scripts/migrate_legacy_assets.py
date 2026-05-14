@@ -1,3 +1,51 @@
+"""One-time migration script: import legacy SPA files into MinIO and PostgreSQL.
+
+Run this ONCE when first migrating from the old static-file frontend. After
+that the database owns all asset records and this script should not be re-run.
+
+WARNING: step 3 deletes ALL existing FileAsset rows before re-importing.
+Do NOT run against a database that already has production uploads.
+
+What it does
+------------
+1. Creates all DB tables and MinIO buckets (idempotent via create_all / ensure_buckets).
+2. Seeds default projects and rooms (skipped if they already exist).
+3. Deletes all existing FileAsset rows from the database.
+4. Walks <frontend-public-dir>/Images/thumbnails/<YYYYMMDD>/ for each date folder:
+     - Uploads the corresponding panorama from Images/panoramas/<YYYYMMDD>/
+       to the images bucket and the thumbnail to the thumbnails bucket.
+     - Creates a FileAsset record with metadata_json.source = "legacy-public".
+5. Walks <frontend-public-dir>/PCD/<YYYYMMDD>/ and uploads each point cloud to
+   the pointclouds bucket (no Potree conversion — originals only).
+
+Room assignment
+---------------
+Room slugs are inferred from filenames via regex: any filename containing
+"room1" … "room6" (case-insensitive, optional zero-padding, e.g. "Room 03")
+maps to the slug "room1" … "room6". Files that don't match are skipped with
+a warning.
+
+Source directory layout expected
+---------------------------------
+<frontend-public-dir>/
+├── Images/
+│   ├── thumbnails/
+│   │   └── <YYYYMMDD>/       ← date folder
+│   │       └── <filename>
+│   └── panoramas/
+│       └── <YYYYMMDD>/
+│           └── <filename>    ← matched 1:1 with the thumbnail by filename
+└── PCD/
+    └── <YYYYMMDD>/
+        └── <filename>
+
+Path resolution (first match wins)
+-----------------------------------
+1. --frontend-public-dir CLI argument
+2. LEGACY_FRONTEND_PUBLIC_DIR environment variable
+3. ../frontend/public relative to this repo (sibling checkout)
+4. /legacy-frontend-public (Docker mount default)
+"""
 import argparse
 import os
 import mimetypes

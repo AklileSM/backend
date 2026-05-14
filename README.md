@@ -163,7 +163,7 @@ Copy `.env.example` to `.env` for local development.
 
 ### Database
 
-Either set `DATABASE_URL` directly, or set the individual `DB_`* variables (the URL takes precedence):
+Either set `DATABASE_URL` directly, or set the individual `DB`_* variables (the URL takes precedence):
 
 
 | Variable       | Default     | Description                                                                                 |
@@ -248,7 +248,7 @@ Either set `DATABASE_URL` directly, or set the individual `DB_`* variables (the 
         └── <filename>        ← must contain "room1"…"room6" in the name
 ```
 
-Room slugs are inferred from filenames via regex — any filename containing `room1` through `room6` (case-insensitive, optional zero-padding) maps to the corresponding room slug.
+Room slugs are inferred from filenames via regex, any filename containing `room1` through `room6` (case-insensitive, optional zero-padding) maps to the corresponding room slug.
 
 ### Running the script
 
@@ -281,6 +281,26 @@ docker exec -it a6_stern_api python scripts/migrate_legacy_assets.py \
 4. Uploads each panorama image to `construction-images`, its paired thumbnail to `construction-thumbnails`
 5. Uploads each point cloud file to `construction-pointclouds`
 6. Creates a `FileAsset` record for each file with `metadata_json.source = "legacy-public"`
+
+## HTTP error reference
+
+All error responses use the FastAPI default shape: `{"detail": "<message>"}`.
+
+
+| Code  | When it fires                                                                                                                                                                                                                                         |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400` | Invalid `media_type`; bad `capture_date` format; missing required form field; `chunk_index < 0`; `total_chunks ≤ 0`; `file_size ≤ 0`; mismatched declared vs. uploaded size for direct point cloud uploads; non-PDF file sent to a PDF upload slot    |
+| `401` | No `Authorization` header; token scheme is not `Bearer`; JWT is expired, malformed, or has wrong `type` claim                                                                                                                                         |
+| `403` | Account is disabled (`is_active=False`); user is not an admin on an admin-only route; user lacks `owner` or `editor` role on the target project for upload/delete                                                                                     |
+| `404` | Room, file asset, or upload session not found; point cloud not yet converted (Potree files missing); thumbnail or content object missing in MinIO                                                                                                     |
+| `409` | SHA-256 duplicate — the exact same file has already been uploaded (response body names the room and date where it lives); retry requested for a conversion whose status is not `"failed"`; retry requested after the original LAZ was already deleted |
+| `413` | File exceeds `MAX_UPLOAD_SIZE_BYTES` (default 5 GB) — checked both during streaming and during chunk reassembly                                                                                                                                       |
+| `416` | `Range` header requests bytes beyond the end of the file                                                                                                                                                                                              |
+| `422` | Pydantic validation error — missing or wrong-typed request body / form field (FastAPI generated)                                                                                                                                                      |
+| `500` | Conversion queue submission error when the pool is not initialised                                                                                                                                                                                    |
+| `502` | Cannot download original LAZ from MinIO when retrying a failed conversion                                                                                                                                                                             |
+| `503` | Converter process pool refuses the retry submission                                                                                                                                                                                                   |
+
 
 ## Code structure
 
