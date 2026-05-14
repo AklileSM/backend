@@ -7,10 +7,10 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy.orm.exc import StaleDataError
+from sqlalchemy import update as sql_update
 
 from app.config import get_settings
-from app.database import SessionLocal
+from app.database import SessionLocal, engine
 from app.models import FileAsset
 from app.services.storage import storage_service
 
@@ -135,6 +135,12 @@ def convert_pointcloud_background(asset_id: str, laz_tmp_path: str) -> None:
     the three output files (metadata.json, hierarchy.bin, octree.bin) to MinIO.
     Updates FileAsset.metadata_json with the conversion status when done.
     """
+    # On Linux, ProcessPoolExecutor uses fork(). The forked worker inherits the
+    # parent's connection pool, meaning both parent and child share the same
+    # underlying TCP sockets. Dispose the pool here so every DB operation in
+    # this worker uses a fresh, process-local connection.
+    engine.dispose()
+
     db = SessionLocal()
     try:
         _set_status(db, asset_id, "processing")
@@ -192,19 +198,25 @@ def convert_pointcloud_background(asset_id: str, laz_tmp_path: str) -> None:
             meta["conversion_status"] = "ready"
             meta["potree_base_object"] = base_object
             meta.pop("conversion_error", None)
-            asset.metadata_json = meta
-            try:
-                db.commit()
-            except StaleDataError:
-                # Asset was deleted from the UI while conversion was running.
-                # Potree files are already in MinIO but there is no DB record to
-                # update. Log a warning and exit cleanly — the outer except/finally
-                # will still close the session and remove the temp LAZ.
+
+            # Use a direct SQL UPDATE to avoid ORM-level StaleDataError and any
+            # session state issues from the long-running subprocess. rowcount==0
+            # means the asset was deleted from the UI while conversion was running.
+            updated = db.execute(
+                sql_update(FileAsset)
+                .where(FileAsset.id == asset_id)
+                .values(metadata_json=meta)
+                .execution_options(synchronize_session=False)
+            )
+            db.commit()
+            if updated.rowcount == 0:
                 logger.warning(
                     "Asset %s was deleted during conversion; Potree files in MinIO are orphaned",
                     asset_id,
                 )
                 return
+
+            db.refresh(asset)
             logger.info("Point cloud conversion complete for asset %s", asset_id)
 
             if get_settings().delete_original_pointcloud_after_conversion:
