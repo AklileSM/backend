@@ -7,6 +7,8 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Optional
 
+from sqlalchemy.orm.exc import StaleDataError
+
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models import FileAsset
@@ -191,7 +193,18 @@ def convert_pointcloud_background(asset_id: str, laz_tmp_path: str) -> None:
             meta["potree_base_object"] = base_object
             meta.pop("conversion_error", None)
             asset.metadata_json = meta
-            db.commit()
+            try:
+                db.commit()
+            except StaleDataError:
+                # Asset was deleted from the UI while conversion was running.
+                # Potree files are already in MinIO but there is no DB record to
+                # update. Log a warning and exit cleanly — the outer except/finally
+                # will still close the session and remove the temp LAZ.
+                logger.warning(
+                    "Asset %s was deleted during conversion; Potree files in MinIO are orphaned",
+                    asset_id,
+                )
+                return
             logger.info("Point cloud conversion complete for asset %s", asset_id)
 
             if get_settings().delete_original_pointcloud_after_conversion:
