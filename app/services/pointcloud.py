@@ -161,6 +161,12 @@ def convert_pointcloud_background(asset_id: str, laz_tmp_path: str) -> None:
                     f"PotreeConverter exited {result.returncode}: {detail}"
                 )
 
+            # PotreeConverter can run for minutes. The session opened at the
+            # start of this function may have timed out. Close it and get a
+            # fresh connection so the final commit doesn't hit a dead socket.
+            db.close()
+            db = SessionLocal()
+
             asset = db.get(FileAsset, asset_id)
             if asset is None:
                 raise RuntimeError(f"Asset {asset_id} disappeared during conversion")
