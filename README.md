@@ -282,6 +282,81 @@ docker exec -it a6_stern_api python scripts/migrate_legacy_assets.py \
 5. Uploads each point cloud file to `construction-pointclouds`
 6. Creates a `FileAsset` record for each file with `metadata_json.source = "legacy-public"`
 
+## Testing
+
+No tests are currently in the project. The server is verified manually via the Swagger UI at `/api/docs`.
+
+**To add tests**, install pytest and the HTTPX test client:
+
+```bash
+pip install pytest pytest-asyncio httpx
+# Add these to requirements-dev.txt (create it if it doesn't exist)
+```
+
+### Recommended test setup
+
+Use FastAPI's `TestClient` with an in-memory SQLite database. Create `tests/conftest.py`:
+
+```python
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.main import app
+from app.database import Base, get_db
+
+engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+TestSession = sessionmaker(bind=engine)
+Base.metadata.create_all(bind=engine)
+
+def override_get_db():
+    db = TestSession()
+    try:
+        yield db
+    finally:
+        db.close()
+
+app.dependency_overrides[get_db] = override_get_db
+
+@pytest.fixture
+def client():
+    return TestClient(app)
+
+@pytest.fixture
+def admin_client(client):
+    """A TestClient with a valid admin token pre-attached."""
+    resp = client.post("/api/auth/register", json={"username": "admin", "password": "testpass"})
+    token = resp.json()["access_token"]
+    client.headers["Authorization"] = f"Bearer {token}"
+    return client
+```
+
+### What to test
+
+| Area | Key assertions |
+|------|----------------|
+| `POST /api/auth/register` | First user gets `is_admin=True`; second user does not |
+| `POST /api/auth/login` | Valid credentials return token; wrong password returns 401 |
+| `POST /api/upload/single` | SHA-256 duplicate returns 409 with location message |
+| Role enforcement | Viewer cannot upload (403); editor can |
+| Explorer endpoints | Correct grouping by date and by room |
+| `GET /api/health` | Returns `{"status": "ok", ...}` |
+
+### What to mock
+
+MinIO storage interactions — mock `app.services.storage.storage_service` at the module level. Do not test against a real MinIO instance in unit tests; save that for integration tests.
+
+```python
+from unittest.mock import MagicMock, patch
+
+@patch("app.api.upload.storage_service")
+def test_upload_calls_storage(mock_storage, admin_client):
+    mock_storage.upload_file_path.return_value = None
+    mock_storage.generate_thumbnail.return_value = b"..."
+    # ... rest of test
+```
+
 ## HTTP error reference
 
 All error responses use the FastAPI default shape: `{"detail": "<message>"}`.
