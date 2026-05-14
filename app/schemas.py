@@ -170,6 +170,7 @@ class ReportCreateRequest(BaseModel):
 class ReportResponse(BaseModel):
     id: str
     file_id: str
+    label: str | None = None
     ai_description: str | None = None
     manual_observations: str | None = None
     flags: list[str] = Field(default_factory=list)
@@ -258,8 +259,8 @@ class AnnotationResponse(BaseModel):
 
 class UserRegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9._-]+$")
-    password: str = Field(min_length=8, max_length=128)
-    email: str | None = Field(default=None, max_length=255)
+    password: str = Field(min_length=6, max_length=128)
+    email: str = Field(max_length=255)
 
 
 class UserLoginRequest(BaseModel):
@@ -272,6 +273,7 @@ class UserPublic(BaseModel):
     username: str
     email: str | None
     is_admin: bool
+    email_verified: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -280,3 +282,12 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserPublic
+
+
+class PasswordResetRequestSchema(BaseModel):
+    email: str
+
+
+class PasswordResetConfirmSchema(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8, max_length=128)

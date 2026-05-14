@@ -96,6 +96,7 @@ def _report_to_response(report: Report) -> ReportResponse:
     return ReportResponse(
         id=report.id,
         file_id=report.file_id,
+        label=report.label,
         ai_description=report.ai_description,
         manual_observations=report.manual_observations,
         flags=_coerce_str_list(report.flags),
@@ -755,6 +756,7 @@ async def publish_viewer_draft(
     draft_id: str,
     file: UploadFile = File(...),
     file_id: str = Form(...),
+    label: str | None = Form(None),
     ai_description: str | None = Form(None),
     manual_observations: str | None = Form(None),
     flags_json: str | None = Form(None),
@@ -798,6 +800,7 @@ async def publish_viewer_draft(
     report = Report(
         id=report_id,
         file_id=file_id,
+        label=label or None,
         ai_description=ai_description,
         manual_observations=manual_observations,
         flags=flags,
@@ -824,6 +827,7 @@ async def publish_viewer_draft(
 async def create_report_with_pdf(
     file: UploadFile = File(...),
     file_id: str = Form(...),
+    label: str | None = Form(None),
     ai_description: str | None = Form(None),
     manual_observations: str | None = Form(None),
     flags_json: str | None = Form(None),
@@ -860,6 +864,7 @@ async def create_report_with_pdf(
     report = Report(
         id=report_id,
         file_id=file_id,
+        label=label or None,
         ai_description=ai_description,
         manual_observations=manual_observations,
         flags=flags,

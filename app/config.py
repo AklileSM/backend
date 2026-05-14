@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 10080
 
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = "noreply@example.com"
+    smtp_from_name: str = "A6 Stern"
+    smtp_use_tls: bool = True
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def sqlalchemy_database_url(self) -> str:

@@ -220,6 +220,43 @@ def ensure_users_role_dropped(engine: Engine) -> None:
     logger.info("Dropped legacy users.role column")
 
 
+def ensure_users_email_fields(engine: Engine) -> None:
+    """Add email verification and password reset columns to users if missing."""
+    inspector = inspect(engine)
+    if not inspector.has_table("users"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("users")}
+    with engine.begin() as conn:
+        if "email_verified" not in cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT FALSE"))
+            logger.info("Added users.email_verified column")
+        if "email_verification_token" not in cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email_verification_token VARCHAR(128)"))
+            logger.info("Added users.email_verification_token column")
+        if "email_verification_token_expires_at" not in cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email_verification_token_expires_at TIMESTAMP"))
+            logger.info("Added users.email_verification_token_expires_at column")
+        if "password_reset_token" not in cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN password_reset_token VARCHAR(128)"))
+            logger.info("Added users.password_reset_token column")
+        if "password_reset_token_expires_at" not in cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN password_reset_token_expires_at TIMESTAMP"))
+            logger.info("Added users.password_reset_token_expires_at column")
+
+
+def ensure_reports_label(engine: Engine) -> None:
+    """Add label column to reports if missing."""
+    inspector = inspect(engine)
+    if not inspector.has_table("reports"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("reports")}
+    if "label" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE reports ADD COLUMN label VARCHAR(255)"))
+    logger.info("Added reports.label column")
+
+
 def ensure_project_members_table(engine: Engine) -> None:
     """Create project_members table if it does not exist."""
     inspector = inspect(engine)
