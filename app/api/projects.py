@@ -1,6 +1,9 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+import mimetypes
+
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -32,12 +35,7 @@ _FLOORPLAN_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".web
 def _project_to_response(p: Project) -> ProjectResponse:
     floorplan_url: str | None = None
     if p.floorplan_url:
-        try:
-            floorplan_url = storage_service.get_presigned_url(
-                settings.minio_bucket_floorplans, p.floorplan_url
-            )
-        except Exception:
-            floorplan_url = None
+        floorplan_url = f"/api/projects/{p.id}/floorplan"
     return ProjectResponse(
         id=p.id,
         name=p.name,
@@ -223,6 +221,36 @@ def delete_project(
 # ---------------------------------------------------------------------------
 # Floorplan
 # ---------------------------------------------------------------------------
+
+@router.get("/{project_id}/floorplan", response_model=None)
+def get_floorplan(
+    project_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    project = _get_project_or_404(project_id, db)
+    if not project.floorplan_url:
+        raise HTTPException(status_code=404, detail="No floorplan uploaded")
+    try:
+        stat = storage_service.stat_object(settings.minio_bucket_floorplans, project.floorplan_url)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Floorplan not found in storage")
+
+    etag = f'"{stat.etag}"' if stat.etag else None
+    if etag and request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)
+
+    try:
+        data = storage_service.get_object_bytes(settings.minio_bucket_floorplans, project.floorplan_url)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Floorplan not found in storage")
+
+    content_type = mimetypes.guess_type(project.floorplan_url)[0] or "image/jpeg"
+    headers = {"Content-Length": str(len(data)), "Cache-Control": "public, max-age=86400"}
+    if etag:
+        headers["ETag"] = etag
+    return Response(content=data, media_type=content_type, headers=headers)
+
 
 @router.post("/{project_id}/floorplan", response_model=ProjectResponse)
 async def upload_floorplan(

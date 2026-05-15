@@ -101,6 +101,26 @@ class StorageService:
             response.close()
             response.release_conn()
 
+    def _rewrite_presigned_url(self, raw: str) -> str:
+        """Swap the internal MinIO host/path with the public URL when MINIO_PUBLIC_URL is configured.
+
+        Supports two modes:
+          - Direct MinIO tunnel:  MINIO_PUBLIC_URL=https://minio.example.com
+            → replaces host only, keeps object path as-is
+          - Backend proxy:        MINIO_PUBLIC_URL=https://api.example.com/api/media
+            → replaces host AND prepends the proxy path prefix
+        """
+        public_base = (settings.minio_public_url or settings.minio_public_upload_base_url or "").strip()
+        if not public_base:
+            return raw
+        try:
+            src = urlparse(raw)
+            dst = urlparse(public_base if "://" in public_base else f"https://{public_base}")
+            new_path = dst.path.rstrip("/") + src.path
+            return urlunparse((dst.scheme, dst.netloc, new_path, src.params, src.query, src.fragment))
+        except Exception:
+            return raw
+
     def get_presigned_url(self, bucket_name: str, object_name: str) -> str:
         return self.client.presigned_get_object(
             bucket_name,
@@ -115,15 +135,7 @@ class StorageService:
             object_name=object_name,
             expires=timedelta(seconds=settings.presigned_url_expiry_seconds),
         )
-        public_base = (settings.minio_public_upload_base_url or "").strip()
-        if not public_base:
-            return raw
-        try:
-            src = urlparse(raw)
-            dst = urlparse(public_base if "://" in public_base else f"https://{public_base}")
-            return urlunparse((dst.scheme, dst.netloc, src.path, src.params, src.query, src.fragment))
-        except Exception:
-            return raw
+        return self._rewrite_presigned_url(raw)
 
     def download_object_to_path(self, bucket_name: str, object_name: str, file_path: str) -> None:
         self.client.fget_object(bucket_name, object_name, file_path)

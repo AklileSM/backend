@@ -32,8 +32,12 @@ class Settings(BaseSettings):
     minio_bucket_pdfs: str = "construction-pdfs"
     minio_bucket_reports: str = "construction-reports"
     minio_bucket_floorplans: str = "construction-floorplans"
-    # Optional public URL for browser direct uploads (example: https://minio.example.com).
-    # If empty, presigned URLs use minio_server as-is.
+    # Public-facing MinIO URL (e.g. https://minio.sitescope.smart-crg.com).
+    # Required when the app is accessed over the internet (Cloudflare Tunnel, reverse proxy, etc.).
+    # All presigned GET and PUT URLs will use this base instead of the internal minio_server address.
+    # Without this, browsers block image/file requests because the internal IP is unreachable.
+    minio_public_url: str = ""
+    # Kept for backward compatibility — minio_public_url takes priority when both are set.
     minio_public_upload_base_url: str = ""
 
     vision_api_key: str = ""
