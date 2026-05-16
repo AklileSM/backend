@@ -21,7 +21,7 @@ from app.api.deps import get_current_user, require_user_can_upload
 from app.config import get_settings
 from app.database import SessionLocal, get_db
 from app.models import FileAsset, ProjectMember, Room, User
-from app.schemas import UploadResponse
+from app.schemas import PrecheckHashRequest, PrecheckHashResponse, UploadResponse
 from app.services.ai import generate_and_cache_ai_description
 from app.services.pointcloud import submit_conversion
 from app.services.storage import storage_service
@@ -166,6 +166,40 @@ def _check_duplicate(db: "Session", room_id: str, capture_date: date, sha256_has
             status_code=409,
             detail=f"This file has already been uploaded to {room_name} on {existing.capture_date} as \"{existing.display_name}\".",
         )
+
+
+@router.post("/precheck-hash", response_model=PrecheckHashResponse)
+def precheck_hash(
+    payload: PrecheckHashRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PrecheckHashResponse:
+    """Tell the client whether this SHA-256 is already in the system.
+
+    Same lookup as `_check_duplicate`, but returns the info instead of raising
+    409 so the frontend can warn the user *before* sending any chunks. This
+    saves the round-trip of assembling + hashing + uploading a multi-GB LAS
+    only to discover it's a duplicate.
+    """
+    digest = (payload.sha256_hash or "").strip().lower()
+    # SHA-256 hex is exactly 64 lowercase hex chars; anything else is junk.
+    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise HTTPException(status_code=400, detail="Invalid SHA-256 hash")
+
+    existing = db.scalar(
+        select(FileAsset)
+        .where(FileAsset.sha256_hash == digest)
+        .options(joinedload(FileAsset.room))
+    )
+    if existing is None:
+        return PrecheckHashResponse(duplicate=False)
+
+    return PrecheckHashResponse(
+        duplicate=True,
+        room_name=existing.room.name if existing.room else None,
+        capture_date=existing.capture_date,
+        display_name=existing.display_name,
+    )
 
 
 def _read_upload_manifest(manifest_path: Path) -> dict[str, str]:

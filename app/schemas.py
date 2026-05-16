@@ -159,6 +159,20 @@ class UploadResponse(BaseModel):
     capture_date: date
 
 
+class PrecheckHashRequest(BaseModel):
+    sha256_hash: str
+
+
+class PrecheckHashResponse(BaseModel):
+    """Informational duplicate check; never raises 409, so the frontend can
+    surface the existing-file info inline instead of waiting for the upload."""
+
+    duplicate: bool
+    room_name: str | None = None
+    capture_date: date | None = None
+    display_name: str | None = None
+
+
 class ReportCreateRequest(BaseModel):
     file_id: str
     ai_description: str | None = None
