@@ -148,7 +148,7 @@ class FileAsset(Base):
     metadata_json carries upload provenance and type-specific state:
       - All types: {"uploaded_by_user_id": str, "uploaded_by_username": str}
       - Point clouds additionally: {
-            "conversion_status": "pending" | "processing" | "ready" | "failed",
+            "conversion_status": "uploading" | "pending" | "processing" | "ready" | "failed",
             "conversion_error": str,          # present only on failure
             "potree_base_object": str,         # MinIO key prefix for Potree files
             "original_removed_after_conversion": bool

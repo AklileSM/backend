@@ -5,6 +5,7 @@ import mimetypes
 import os
 import shutil
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -18,7 +19,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user, require_user_can_upload
 from app.config import get_settings
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.models import FileAsset, ProjectMember, Room, User
 from app.schemas import UploadResponse
 from app.services.ai import generate_and_cache_ai_description
@@ -192,6 +193,12 @@ def _save_pointcloud_asset_and_queue_conversion(
     display_name: str,
     sha256_hash: str | None = None,
 ) -> UploadResponse:
+    """Synchronous variant — still used by the small/direct upload paths.
+
+    The chunked `/complete` endpoint uses the streaming background variant
+    below instead so the HTTP response doesn't outlast Cloudflare's 100s /
+    Next.js's 30s proxy timeouts on multi-GB uploads.
+    """
     asset = FileAsset(
         room_id=room.id,
         media_type="pointcloud",
@@ -237,6 +244,124 @@ def _save_pointcloud_asset_and_queue_conversion(
         file_name=asset.display_name,
         capture_date=asset.capture_date,
     )
+
+
+def _finalize_pointcloud_upload_in_background(
+    *,
+    asset_id: str,
+    upload_dir: Path,
+    total_chunks: int,
+    bucket_name: str,
+    object_name: str,
+    content_type: str,
+    extension: str,
+) -> None:
+    """Background worker for `/pointcloud/complete`.
+
+    The asset row already exists with metadata_json["conversion_status"] ==
+    "uploading". We assemble chunks → SHA-256 → duplicate check → MinIO upload
+    → hand the temp file to the converter pool. The asset progresses through
+    uploading → processing → ready (or → failed on error). Runs in a daemon
+    thread so the originating HTTP request can return immediately.
+    """
+    db = SessionLocal()
+    tmp_fd, assembled_path = tempfile.mkstemp(suffix=extension or ".laz")
+    file_size = 0
+    hasher = hashlib.sha256()
+    minio_uploaded = False
+    handed_off_to_converter = False
+    try:
+        with os.fdopen(tmp_fd, "wb") as out:
+            for i in range(total_chunks):
+                part = upload_dir / f"{i:08d}.part"
+                if not part.exists():
+                    raise RuntimeError(f"Missing chunk {i}")
+                with open(part, "rb") as src:
+                    while True:
+                        buf = src.read(_POINTCLOUD_CHUNK)
+                        if not buf:
+                            break
+                        file_size += len(buf)
+                        if file_size > settings.max_upload_size_bytes:
+                            raise RuntimeError(
+                                f"File exceeds {settings.max_upload_size_bytes}-byte limit"
+                            )
+                        hasher.update(buf)
+                        out.write(buf)
+
+        sha256_hash = hasher.hexdigest()
+
+        # Duplicate check — exclude the placeholder row we just inserted.
+        existing = db.scalar(
+            select(FileAsset)
+            .where(FileAsset.sha256_hash == sha256_hash, FileAsset.id != asset_id)
+            .options(joinedload(FileAsset.room))
+        )
+        if existing is not None:
+            room_name = existing.room.name if existing.room else "an unknown room"
+            raise RuntimeError(
+                f'Already uploaded to {room_name} on {existing.capture_date} as "{existing.display_name}"'
+            )
+
+        storage_service.upload_file_path(
+            bucket_name=bucket_name,
+            object_name=object_name,
+            file_path=assembled_path,
+            content_type=content_type,
+        )
+        minio_uploaded = True
+
+        asset = db.get(FileAsset, asset_id)
+        if asset is None:
+            # Row was deleted from the UI while we were uploading — clean up MinIO.
+            storage_service.remove_object_best_effort(bucket_name, object_name)
+            return
+        asset.file_size = file_size
+        asset.sha256_hash = sha256_hash
+        meta = dict(asset.metadata_json or {})
+        meta["conversion_status"] = "pending"
+        meta.pop("conversion_error", None)
+        asset.metadata_json = meta
+        db.commit()
+
+        submit_conversion(asset_id, assembled_path)
+        handed_off_to_converter = True
+    except Exception as exc:
+        logger.exception(
+            "Background finalisation failed for pointcloud asset %s", asset_id
+        )
+        try:
+            asset = db.get(FileAsset, asset_id)
+            if asset is not None:
+                meta = dict(asset.metadata_json or {})
+                meta["conversion_status"] = "failed"
+                meta["conversion_error"] = str(exc)[:600]
+                asset.metadata_json = meta
+                db.commit()
+        except Exception:
+            logger.exception("Could not mark asset %s as failed", asset_id)
+        if minio_uploaded:
+            storage_service.remove_object_best_effort(bucket_name, object_name)
+    finally:
+        db.close()
+        if not handed_off_to_converter:
+            try:
+                os.unlink(assembled_path)
+            except OSError:
+                pass
+        for p in upload_dir.glob("*.part"):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        try:
+            (upload_dir / "manifest.txt").unlink()
+        except OSError:
+            pass
+        try:
+            upload_dir.rmdir()
+        except OSError:
+            pass
 
 
 @router.post("/pointcloud/init")
@@ -369,12 +494,22 @@ def complete_pointcloud_upload(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> UploadResponse:
+    # Assembling chunks + SHA-256 + the MinIO upload for a multi-GB LAS takes
+    # 1–2 minutes, which is longer than Cloudflare's free-tier (~100s) and
+    # Next.js's rewrite proxy (~30s) will hold a request open. We create the
+    # asset row up front with status="uploading" and do the heavy work in a
+    # daemon thread, so this handler returns in well under a second.
     if total_chunks <= 0:
         raise HTTPException(status_code=400, detail="Invalid total chunk count")
     upload_dir = _pointcloud_upload_path(upload_id)
     manifest = upload_dir / "manifest.txt"
     if not upload_dir.exists() or not manifest.exists():
         raise HTTPException(status_code=404, detail="Upload session not found")
+
+    # Verify every chunk arrived before promising the client a success.
+    for i in range(total_chunks):
+        if not (upload_dir / f"{i:08d}.part").exists():
+            raise HTTPException(status_code=400, detail=f"Missing chunk {i}")
 
     meta = _read_upload_manifest(manifest)
 
@@ -402,75 +537,47 @@ def complete_pointcloud_upload(
     bucket_name = _bucket_for_media_type("pointcloud")
     extension = os.path.splitext(original_filename)[1]
 
-    tmp_fd, assembled_path = tempfile.mkstemp(suffix=extension or ".laz")
-    file_size = 0
-    hasher = hashlib.sha256()
-    try:
-        with os.fdopen(tmp_fd, "wb") as out:
-            for i in range(total_chunks):
-                part = upload_dir / f"{i:08d}.part"
-                if not part.exists():
-                    raise HTTPException(status_code=400, detail=f"Missing chunk {i}")
-                with open(part, "rb") as src:
-                    while True:
-                        buf = src.read(_POINTCLOUD_CHUNK)
-                        if not buf:
-                            break
-                        file_size += len(buf)
-                        if file_size > settings.max_upload_size_bytes:
-                            raise HTTPException(status_code=413, detail="File too large")
-                        hasher.update(buf)
-                        out.write(buf)
+    asset = FileAsset(
+        room_id=room.id,
+        media_type="pointcloud",
+        capture_date=capture_date,
+        original_name=original_filename or "upload",
+        display_name=display_name,
+        bucket_name=bucket_name,
+        object_name=object_name,
+        content_type=content_type,
+        file_size=None,
+        sha256_hash=None,
+        metadata_json={
+            "uploaded_by_user_id": current_user.id,
+            "uploaded_by_username": current_user.username,
+            "conversion_status": "uploading",
+        },
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
 
-        sha256_hash = hasher.hexdigest()
-        _check_duplicate(db, room.id, capture_date, sha256_hash)
-
-        storage_service.upload_file_path(
+    threading.Thread(
+        target=_finalize_pointcloud_upload_in_background,
+        kwargs=dict(
+            asset_id=asset.id,
+            upload_dir=upload_dir,
+            total_chunks=total_chunks,
             bucket_name=bucket_name,
             object_name=object_name,
-            file_path=assembled_path,
             content_type=content_type,
-        )
-    except HTTPException:
-        try:
-            os.unlink(assembled_path)
-        except OSError:
-            pass
-        raise
-    except Exception:
-        try:
-            os.unlink(assembled_path)
-        except OSError:
-            pass
-        raise
-    finally:
-        for p in upload_dir.glob("*.part"):
-            try:
-                p.unlink()
-            except OSError:
-                pass
-        try:
-            manifest.unlink()
-        except OSError:
-            pass
-        try:
-            upload_dir.rmdir()
-        except OSError:
-            pass
+            extension=extension,
+        ),
+        daemon=True,
+    ).start()
 
-    return _save_pointcloud_asset_and_queue_conversion(
-        db=db,
-        room=room,
-        capture_date=capture_date,
-        original_filename=original_filename,
-        object_name=object_name,
-        bucket_name=bucket_name,
-        content_type=content_type,
-        file_size=file_size,
-        current_user=current_user,
-        local_path_for_conversion=assembled_path,
-        display_name=display_name,
-        sha256_hash=sha256_hash,
+    return UploadResponse(
+        id=asset.id,
+        room=room.slug,
+        media_type=asset.media_type,
+        file_name=asset.display_name,
+        capture_date=asset.capture_date,
     )
 
 

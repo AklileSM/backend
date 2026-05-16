@@ -52,7 +52,10 @@ def reset_interrupted_conversions() -> None:
         reset_count = 0
         for asset in assets:
             status = (asset.metadata_json or {}).get("conversion_status")
-            if status in ("pending", "processing"):
+            # "uploading" rows are placeholders created by the chunked /complete
+            # handler; the daemon thread that finalises them dies with the
+            # server, so they too need to be flagged failed on restart.
+            if status in ("uploading", "pending", "processing"):
                 meta = dict(asset.metadata_json or {})
                 meta["conversion_status"] = "failed"
                 meta["conversion_error"] = "Conversion interrupted by server restart — please re-upload."
