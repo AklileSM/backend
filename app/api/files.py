@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 logger = logging.getLogger(__name__)
 from fastapi.responses import Response as PlainResponse, StreamingResponse
-from sqlalchemy import case, cast, func, select
+from sqlalchemy import case, cast, func, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, selectinload
 
@@ -247,6 +247,83 @@ def list_my_uploads(
 
     rows = db.execute(stmt).all()
     return [_serialize_my_upload(asset, room) for asset, room in rows]
+
+
+@router.get("/search", response_model=list[MyUploadItemResponse])
+def search_files(
+    q: str,
+    project_slug: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[MyUploadItemResponse]:
+    """Fuzzy, project-scoped file search.
+
+    Powers the header search box. Matches on display_name, original_name, and
+    room.name with trigram similarity + ILIKE (for short prefix queries that
+    trigram alone misses). If `q` parses as an ISO date, capture_date matches
+    exactly too. Results are ordered by max similarity, then created_at.
+
+    Membership-gated the same way as /my-uploads.
+    """
+    query = (q or "").strip()
+    if not query:
+        return []
+    # Cap pathological queries early — Postgres handles the rest cheaply with
+    # the trigram indexes.
+    if len(query) > 100:
+        query = query[:100]
+
+    project = db.scalar(select(Project).where(Project.slug == project_slug))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not current_user.is_admin:
+        membership = db.scalar(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.user_id == current_user.id,
+            )
+        )
+        if membership is None:
+            raise HTTPException(status_code=403, detail="Not a member of this project")
+
+    # Detect "YYYY-MM-DD" — gives users a way to jump to a date directly.
+    parsed_date = None
+    try:
+        parsed_date = date.fromisoformat(query)
+    except ValueError:
+        pass
+
+    like_pattern = f"%{query}%"
+    similarity = func.greatest(
+        func.similarity(FileAsset.display_name, query),
+        func.similarity(FileAsset.original_name, query),
+        func.similarity(Room.name, query),
+    ).label("score")
+
+    # `op('%')` is the pg_trgm similarity operator — uses the GIN index built
+    # in ensure_search_trigram_indexes(). The ILIKE clauses widen the net for
+    # short prefixes that fall below the default 0.3 similarity threshold.
+    match_clauses = [
+        FileAsset.display_name.ilike(like_pattern),
+        FileAsset.original_name.ilike(like_pattern),
+        Room.name.ilike(like_pattern),
+        FileAsset.display_name.op("%")(query),
+        FileAsset.original_name.op("%")(query),
+        Room.name.op("%")(query),
+    ]
+    if parsed_date is not None:
+        match_clauses.append(FileAsset.capture_date == parsed_date)
+
+    stmt = (
+        select(FileAsset, Room, similarity)
+        .join(Room, FileAsset.room_id == Room.id)
+        .where(Room.project_id == project.id)
+        .where(or_(*match_clauses))
+        .order_by(similarity.desc(), FileAsset.created_at.desc())
+        .limit(20)
+    )
+    rows = db.execute(stmt).all()
+    return [_serialize_my_upload(asset, room) for asset, room, _score in rows]
 
 
 @router.get("/explorer/dates", response_model=ExplorerDatesSummaryResponse)

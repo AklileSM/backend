@@ -285,3 +285,30 @@ def ensure_project_members_table(engine: Engine) -> None:
                 )
             """))
     logger.info("Created project_members table")
+
+
+def ensure_search_trigram_indexes(engine: Engine) -> None:
+    """Enable pg_trgm + create trigram GIN indexes for the file search endpoint.
+
+    pg_trgm gives us cheap fuzzy / typo-tolerant matching over short text
+    columns. The GIN indexes turn `column %% 'query'` and ORDER-BY-similarity
+    queries from full table scans into index hits. Idempotent: every statement
+    here is `IF NOT EXISTS`.
+    """
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+        # gin_trgm_ops is the operator class that lets GIN serve trigram
+        # similarity. Index names are explicit so the migration is replayable.
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS file_assets_display_name_trgm "
+            "ON file_assets USING GIN (display_name gin_trgm_ops)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS file_assets_original_name_trgm "
+            "ON file_assets USING GIN (original_name gin_trgm_ops)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS rooms_name_trgm "
+            "ON rooms USING GIN (name gin_trgm_ops)"
+        ))
+    logger.info("Ensured pg_trgm + trigram indexes for file search")

@@ -19,6 +19,7 @@ from app.services.db_migrations import (
     ensure_reports_label,
     ensure_rooms_fields,
     ensure_rooms_slug_scoped_to_project,
+    ensure_search_trigram_indexes,
     ensure_users_email_fields,
     ensure_users_is_admin,
     ensure_users_role_dropped,
@@ -56,6 +57,7 @@ async def lifespan(_: FastAPI):
     ensure_rooms_slug_scoped_to_project(engine)
     ensure_users_email_fields(engine)
     ensure_reports_label(engine)
+    ensure_search_trigram_indexes(engine)
     with SessionLocal() as db:
         db.execute(text("SELECT 1"))
         seed_defaults(db)
