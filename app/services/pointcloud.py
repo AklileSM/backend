@@ -137,9 +137,10 @@ def convert_pointcloud_background(asset_id: str, laz_tmp_path: str) -> None:
     """
     # On Linux, ProcessPoolExecutor uses fork(). The forked worker inherits the
     # parent's connection pool, meaning both parent and child share the same
-    # underlying TCP sockets. Dispose the pool here so every DB operation in
-    # this worker uses a fresh, process-local connection.
-    engine.dispose()
+    # underlying TCP sockets. close=False discards the inherited pool without
+    # closing those sockets — the parent keeps its working connections, and
+    # this worker opens fresh ones on demand.
+    engine.dispose(close=False)
 
     db = SessionLocal()
     try:
