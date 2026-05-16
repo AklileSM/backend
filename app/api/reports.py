@@ -10,7 +10,16 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.config import get_settings
 from app.database import get_db
-from app.models import ComparisonDraft, FileAsset, Report, User, ViewerReportDraft
+from app.models import (
+    ComparisonDraft,
+    FileAsset,
+    Project,
+    ProjectMember,
+    Report,
+    Room,
+    User,
+    ViewerReportDraft,
+)
 from app.schemas import (
     ComparisonDraftCreateRequest,
     ComparisonDraftDetailResponse,
@@ -27,6 +36,30 @@ from app.services.storage import storage_service
 
 router = APIRouter()
 settings = get_settings()
+
+
+def _resolve_project_for_user(
+    db: Session, project_slug: str, current_user: User
+) -> Project:
+    """Look up a project by slug and confirm the caller can see it.
+
+    Used by the profile listing endpoints to scope results to the project the
+    user is currently in. Admins always pass; everyone else must be a
+    ProjectMember.
+    """
+    project = db.scalar(select(Project).where(Project.slug == project_slug))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not current_user.is_admin:
+        membership = db.scalar(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.user_id == current_user.id,
+            )
+        )
+        if membership is None:
+            raise HTTPException(status_code=403, detail="Not a member of this project")
+    return project
 
 
 def _parse_http_range(range_header: str | None, total: int) -> tuple[int, int] | None:
@@ -251,14 +284,23 @@ def _parse_state_json(state_json: str | None) -> dict | None:
 @router.get("", response_model=list[ReportResponse])
 @router.get("/", response_model=list[ReportResponse])
 def list_reports(
+    project_slug: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ReportResponse]:
-    reports = db.scalars(
+    stmt = (
         select(Report)
         .where(Report.created_by == current_user.id)
         .order_by(Report.created_at.desc())
-    ).all()
+    )
+    if project_slug:
+        project = _resolve_project_for_user(db, project_slug, current_user)
+        stmt = (
+            stmt.join(FileAsset, Report.file_id == FileAsset.id)
+            .join(Room, FileAsset.room_id == Room.id)
+            .where(Room.project_id == project.id)
+        )
+    reports = db.scalars(stmt).all()
     return [_report_to_response(r) for r in reports]
 
 
@@ -393,14 +435,23 @@ def delete_report(
 
 @router.get("/comparison-drafts", response_model=list[ComparisonDraftResponse])
 def list_comparison_drafts(
+    project_slug: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ComparisonDraftResponse]:
-    drafts = db.scalars(
+    stmt = (
         select(ComparisonDraft)
         .where(ComparisonDraft.created_by == current_user.id)
         .order_by(ComparisonDraft.created_at.asc())
-    ).all()
+    )
+    if project_slug:
+        project = _resolve_project_for_user(db, project_slug, current_user)
+        stmt = (
+            stmt.join(FileAsset, ComparisonDraft.file_id == FileAsset.id)
+            .join(Room, FileAsset.room_id == Room.id)
+            .where(Room.project_id == project.id)
+        )
+    drafts = db.scalars(stmt).all()
     return [_draft_to_response(d) for d in drafts]
 
 
@@ -641,14 +692,23 @@ async def publish_comparison_drafts(
 
 @router.get("/viewer-drafts", response_model=list[ViewerDraftResponse])
 def list_viewer_drafts(
+    project_slug: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ViewerDraftResponse]:
-    drafts = db.scalars(
+    stmt = (
         select(ViewerReportDraft)
         .where(ViewerReportDraft.created_by == current_user.id)
         .order_by(ViewerReportDraft.created_at.asc())
-    ).all()
+    )
+    if project_slug:
+        project = _resolve_project_for_user(db, project_slug, current_user)
+        stmt = (
+            stmt.join(FileAsset, ViewerReportDraft.file_id == FileAsset.id)
+            .join(Room, FileAsset.room_id == Room.id)
+            .where(Room.project_id == project.id)
+        )
+    drafts = db.scalars(stmt).all()
     return [_viewer_draft_to_response(d) for d in drafts]
 
 
