@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.deps import get_current_user, require_user_can_upload
 from app.services.pointcloud import submit_conversion
 from app.database import get_db
-from app.models import FileAsset, ProjectMember, Room, User
+from app.models import FileAsset, Project, ProjectMember, Room, User
 from app.schemas import (
     DateMediaCounts,
     ExplorerByDateResponse,
@@ -201,21 +201,50 @@ def _serialize_my_upload(asset: FileAsset, room: Room) -> MyUploadItemResponse:
 
 @router.get("/my-uploads", response_model=list[MyUploadItemResponse])
 def list_my_uploads(
+    project_slug: str | None = None,
+    media_type: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[MyUploadItemResponse]:
-    """Assets whose upload metadata records this user."""
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Upload history is only available for administrators")
+    """Assets uploaded by the current user.
 
-    # Compare as text: cast(json)->>'uploaded_by_user_id' must match user id (plain cast(String) on JSON
-    # values can include JSON quoting and fail to match).
+    Optional `project_slug` scopes the result to a single project; the caller
+    must be a member (or a global admin). Optional `media_type` filters to one
+    of image / video / pointcloud / pdf — used by the profile page to power
+    its Images / Videos / PDFs side-rail.
+
+    The uploader id is stored in `file_assets.metadata_json.uploaded_by_user_id`.
+    Comparing via `cast(JSONB)['key'].astext` avoids the JSON-quoting pitfall
+    that a naive `cast(String)` would hit.
+    """
+    if media_type is not None and media_type not in {"image", "video", "pointcloud", "pdf"}:
+        raise HTTPException(status_code=400, detail="Invalid media_type")
+
     stmt = (
         select(FileAsset, Room)
         .join(Room, FileAsset.room_id == Room.id)
         .where(cast(FileAsset.metadata_json, JSONB)["uploaded_by_user_id"].astext == current_user.id)
         .order_by(FileAsset.created_at.desc())
     )
+
+    if project_slug:
+        project = db.scalar(select(Project).where(Project.slug == project_slug))
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if not current_user.is_admin:
+            membership = db.scalar(
+                select(ProjectMember).where(
+                    ProjectMember.project_id == project.id,
+                    ProjectMember.user_id == current_user.id,
+                )
+            )
+            if membership is None:
+                raise HTTPException(status_code=403, detail="Not a member of this project")
+        stmt = stmt.where(Room.project_id == project.id)
+
+    if media_type:
+        stmt = stmt.where(FileAsset.media_type == media_type)
+
     rows = db.execute(stmt).all()
     return [_serialize_my_upload(asset, room) for asset, room in rows]
 
