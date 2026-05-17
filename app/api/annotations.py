@@ -5,11 +5,14 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from sqlalchemy.orm import selectinload
+
 from app.api.deps import get_current_user
 from app.config import get_settings
 from app.database import get_db
-from app.models import Annotation, FileAsset, User
+from app.models import Annotation, FileAsset, Room, User
 from app.schemas import AnnotationCreateRequest, AnnotationResponse, AnnotationUpdateRequest
+from app.services.activity import log_activity
 from app.services.storage import storage_service
 
 router = APIRouter()
@@ -106,6 +109,31 @@ def create_annotation(
     db.add(annotation)
     db.commit()
     db.refresh(annotation)
+
+    # Resolve the project + room for the activity feed. Cheap because we
+    # already have file_asset in hand and Room is a single PK lookup.
+    room = db.scalar(select(Room).where(Room.id == file_asset.room_id))
+    if room is not None:
+        preview = ""
+        if isinstance(annotation.data, dict):
+            raw = annotation.data.get("text")
+            if isinstance(raw, str):
+                preview = raw.strip()[:120]
+        log_activity(
+            db,
+            project_id=room.project_id,
+            actor=current_user,
+            action="annotation.create",
+            target_type="annotation",
+            target_id=annotation.id,
+            metadata={
+                "file_id": file_asset.id,
+                "file_name": file_asset.display_name,
+                "room_name": room.name,
+                "flag": annotation.flag,
+                "preview": preview,
+            },
+        )
     return _to_response(annotation)
 
 

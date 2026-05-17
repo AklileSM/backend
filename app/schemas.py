@@ -178,6 +178,20 @@ class PrecheckHashRequest(BaseModel):
     sha256_hash: str
 
 
+class ProjectActivityEntry(BaseModel):
+    """One row of the project activity feed."""
+
+    id: str
+    project_id: str
+    user_id: str | None = None
+    username: str
+    action: str
+    target_type: str | None = None
+    target_id: str | None = None
+    metadata: dict | None = None
+    created_at: datetime
+
+
 class PrecheckHashResponse(BaseModel):
     """Informational duplicate check; never raises 409, so the frontend can
     surface the existing-file info inline instead of waiting for the upload."""

@@ -32,7 +32,36 @@ from app.schemas import (
     ViewerDraftResponse,
     ViewerDraftUpdateRequest,
 )
+from app.services.activity import log_activity
 from app.services.storage import storage_service
+
+
+def _log_report_published(
+    db: Session, *, report: Report, file_asset: FileAsset, current_user: User
+) -> None:
+    """Record `report.publish` on the project activity feed.
+
+    Walks file → room → project to find the right project_id. Best-effort
+    via log_activity, so a logging failure can't block the publish.
+    """
+    room = db.scalar(select(Room).where(Room.id == file_asset.room_id))
+    if room is None:
+        return
+    log_activity(
+        db,
+        project_id=room.project_id,
+        actor=current_user,
+        action="report.publish",
+        target_type="report",
+        target_id=report.id,
+        metadata={
+            "report_label": (report.label or "").strip() or None,
+            "file_id": file_asset.id,
+            "file_name": file_asset.display_name,
+            "room_name": room.name,
+            "flags": list(report.flags or []),
+        },
+    )
 
 router = APIRouter()
 settings = get_settings()
@@ -411,6 +440,7 @@ def create_report(
     db.commit()
     db.refresh(report)
 
+    _log_report_published(db, report=report, file_asset=file_asset, current_user=current_user)
     return _report_to_response(report)
 
 
@@ -687,6 +717,7 @@ async def publish_comparison_drafts(
 
     db.commit()
     db.refresh(report)
+    _log_report_published(db, report=report, file_asset=file_asset, current_user=current_user)
     return _report_to_response(report)
 
 
@@ -880,6 +911,7 @@ async def publish_viewer_draft(
 
     db.commit()
     db.refresh(report)
+    _log_report_published(db, report=report, file_asset=file_asset, current_user=current_user)
     return _report_to_response(report)
 
 
@@ -938,4 +970,5 @@ async def create_report_with_pdf(
     db.commit()
     db.refresh(report)
 
+    _log_report_published(db, report=report, file_asset=file_asset, current_user=current_user)
     return _report_to_response(report)

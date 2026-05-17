@@ -11,8 +11,9 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.deps import get_current_user, require_admin
 from app.config import get_settings
 from app.database import get_db
-from app.models import Project, ProjectMember, Room, User
+from app.models import Project, ProjectActivity, ProjectMember, Room, User
 from app.schemas import (
+    ProjectActivityEntry,
     ProjectCreateRequest,
     ProjectMemberAddRequest,
     ProjectMemberResponse,
@@ -23,6 +24,7 @@ from app.schemas import (
     RoomResponse,
     RoomUpdateRequest,
 )
+from app.services.activity import log_activity
 from app.services.storage import storage_service
 
 router = APIRouter()
@@ -465,6 +467,15 @@ def add_member(
     db.commit()
     db.refresh(new_member)
     new_member.user = target_user
+    log_activity(
+        db,
+        project_id=project_id,
+        actor=current_user,
+        action="member.add",
+        target_type="project_member",
+        target_id=target_user.id,
+        metadata={"added_username": target_user.username, "role": new_member.role},
+    )
     return _member_to_response(new_member)
 
 
@@ -507,12 +518,73 @@ def remove_member(
         raise HTTPException(status_code=403, detail="Only project owners can remove other members")
 
     member = db.scalar(
-        select(ProjectMember).where(
+        select(ProjectMember)
+        .where(
             ProjectMember.project_id == project_id,
             ProjectMember.user_id == user_id,
         )
+        .options(selectinload(ProjectMember.user))
     )
     if member is None:
         raise HTTPException(status_code=404, detail="Member not found")
+    removed_username = member.user.username if member.user else user_id
     db.delete(member)
     db.commit()
+    log_activity(
+        db,
+        project_id=project_id,
+        actor=current_user,
+        action="member.remove",
+        target_type="project_member",
+        target_id=user_id,
+        metadata={"removed_username": removed_username},
+    )
+
+
+@router.get("/by-slug/{slug}/activity", response_model=list[ProjectActivityEntry])
+def get_project_activity(
+    slug: str,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ProjectActivityEntry]:
+    """Latest N activity entries for a project, newest first.
+
+    Any project member (or a global admin) can read the feed — same gate
+    as listing rooms. Caps `limit` at 200 so a bad client can't pull the
+    whole table at once.
+    """
+    project = db.scalar(select(Project).where(Project.slug == slug))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not current_user.is_admin:
+        member = db.scalar(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.user_id == current_user.id,
+            )
+        )
+        if member is None:
+            raise HTTPException(status_code=403, detail="Not a member of this project")
+
+    capped = max(1, min(limit or 50, 200))
+    rows = db.scalars(
+        select(ProjectActivity)
+        .where(ProjectActivity.project_id == project.id)
+        .order_by(ProjectActivity.created_at.desc())
+        .limit(capped)
+    ).all()
+    return [
+        ProjectActivityEntry(
+            id=r.id,
+            project_id=r.project_id,
+            user_id=r.user_id,
+            username=r.username,
+            action=r.action,
+            target_type=r.target_type,
+            target_id=r.target_id,
+            metadata=r.metadata_json,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]

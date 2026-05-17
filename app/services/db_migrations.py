@@ -287,6 +287,38 @@ def ensure_project_members_table(engine: Engine) -> None:
     logger.info("Created project_members table")
 
 
+def ensure_project_activity_table(engine: Engine) -> None:
+    """Create the project_activity table on first deploy.
+
+    Append-only audit log. Indexed on (project_id, created_at desc) because
+    every read is "latest N entries for project X". user_id is SET NULL on
+    user deletion — we keep the row but lose the FK link; the denormalised
+    username column still tells you who acted.
+    """
+    inspector = inspect(engine)
+    if inspector.has_table("project_activity"):
+        return
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE project_activity (
+                id VARCHAR(36) PRIMARY KEY,
+                project_id VARCHAR(36) NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                user_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL,
+                username VARCHAR(64) NOT NULL,
+                action VARCHAR(40) NOT NULL,
+                target_type VARCHAR(40),
+                target_id VARCHAR(64),
+                metadata_json JSON,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+        """))
+        conn.execute(text(
+            "CREATE INDEX project_activity_project_created_idx "
+            "ON project_activity (project_id, created_at DESC)"
+        ))
+    logger.info("Created project_activity table")
+
+
 def ensure_annotations_extensions(engine: Engine) -> None:
     """Add flag, linked_annotation_id, and attachment_bucket_name/object_name
     columns to annotations if they're missing.

@@ -22,9 +22,32 @@ from app.config import get_settings
 from app.database import SessionLocal, get_db
 from app.models import FileAsset, ProjectMember, Room, User
 from app.schemas import PrecheckHashRequest, PrecheckHashResponse, UploadResponse
+from app.services.activity import log_activity
 from app.services.ai import generate_and_cache_ai_description
 from app.services.pointcloud import submit_conversion
 from app.services.storage import storage_service
+
+
+def _log_upload_activity(db: Session, *, room: Room, asset: FileAsset, current_user: User) -> None:
+    """Record an `upload.<media_type>` row on the project activity feed.
+
+    Centralised here so every upload path (small, chunked, direct-MinIO,
+    point-cloud) records the same shape of metadata.
+    """
+    log_activity(
+        db,
+        project_id=room.project_id,
+        actor=current_user,
+        action=f"upload.{asset.media_type}",
+        target_type="file_asset",
+        target_id=asset.id,
+        metadata={
+            "file_name": asset.display_name,
+            "room_name": room.name,
+            "room_slug": room.slug,
+            "capture_date": asset.capture_date.isoformat(),
+        },
+    )
 
 router = APIRouter()
 settings = get_settings()
@@ -270,6 +293,8 @@ def _save_pointcloud_asset_and_queue_conversion(
             status_code=500,
             detail=f"Failed to queue conversion: {exc}",
         ) from exc
+
+    _log_upload_activity(db, room=room, asset=asset, current_user=current_user)
 
     return UploadResponse(
         id=asset.id,
@@ -606,6 +631,8 @@ def complete_pointcloud_upload(
         daemon=True,
     ).start()
 
+    _log_upload_activity(db, room=room, asset=asset, current_user=current_user)
+
     return UploadResponse(
         id=asset.id,
         room=room.slug,
@@ -851,6 +878,8 @@ async def upload_single(
         if media_type == "image":
             background_tasks.add_task(generate_and_cache_ai_description, asset.id)
 
+        _log_upload_activity(db, room=room, asset=asset, current_user=current_user)
+
         return UploadResponse(
             id=asset.id,
             room=room.slug,
@@ -939,6 +968,8 @@ async def _upload_pointcloud(
     # Submit to the process pool — runs in a separate process, does not block
     # the web server. Temp file is cleaned up by convert_pointcloud_background.
     submit_conversion(asset.id, tmp_path)
+
+    _log_upload_activity(db, room=room, asset=asset, current_user=current_user)
 
     return UploadResponse(
         id=asset.id,

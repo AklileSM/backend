@@ -328,3 +328,43 @@ class Annotation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     file: Mapped[FileAsset] = relationship(back_populates="annotations")
+
+
+class ProjectActivity(Base):
+    """Append-only audit feed for a project.
+
+    Each row records *who did what when* against a project. The actor's
+    username is denormalised so the log keeps making sense after the user
+    is deleted (user_id is nullable + ON DELETE SET NULL for the same
+    reason).
+
+    action is a dotted string (e.g. "upload.image", "annotation.create",
+    "report.publish", "member.add", "member.remove") — kept as plain text
+    rather than an Enum so new actions can be added without a schema
+    migration.
+
+    metadata_json carries the small bag of human-readable fields the feed
+    needs to render without joining (file_name, room_name, annotation
+    preview, etc.).
+
+    The cascade on project_id is the load-bearing one: deleting a project
+    sweeps its activity. target_id is plain text — different tables have
+    different id shapes (file_assets.id is uuid, project_members has a
+    composite PK).
+    """
+
+    __tablename__ = "project_activity"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    username: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(40), nullable=False)
+    target_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
