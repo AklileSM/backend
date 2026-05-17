@@ -287,6 +287,37 @@ def ensure_project_members_table(engine: Engine) -> None:
     logger.info("Created project_members table")
 
 
+def ensure_annotations_extensions(engine: Engine) -> None:
+    """Add flag, linked_annotation_id, and attachment_bucket_name/object_name
+    columns to annotations if they're missing.
+
+    Backfills nothing — these columns are nullable on purpose; existing pins
+    just stay uncategorised and unlinked.
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("annotations"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("annotations")}
+    with engine.begin() as conn:
+        if "flag" not in cols:
+            conn.execute(text("ALTER TABLE annotations ADD COLUMN flag VARCHAR(20)"))
+            logger.info("Added annotations.flag column")
+        if "linked_annotation_id" not in cols:
+            # Self-referencing FK with ON DELETE SET NULL so removing a target
+            # annotation doesn't leave a dangling pointer on the referrer.
+            conn.execute(text(
+                "ALTER TABLE annotations ADD COLUMN linked_annotation_id VARCHAR(36) "
+                "REFERENCES annotations(id) ON DELETE SET NULL"
+            ))
+            logger.info("Added annotations.linked_annotation_id column")
+        if "attachment_bucket_name" not in cols:
+            conn.execute(text("ALTER TABLE annotations ADD COLUMN attachment_bucket_name VARCHAR(255)"))
+            logger.info("Added annotations.attachment_bucket_name column")
+        if "attachment_object_name" not in cols:
+            conn.execute(text("ALTER TABLE annotations ADD COLUMN attachment_object_name VARCHAR(500)"))
+            logger.info("Added annotations.attachment_object_name column")
+
+
 def ensure_search_trigram_indexes(engine: Engine) -> None:
     """Enable pg_trgm + create trigram GIN indexes for the file search endpoint.
 

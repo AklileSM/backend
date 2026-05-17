@@ -272,10 +272,21 @@ class AnnotationCreateRequest(BaseModel):
     file_id: str
     annotation_type: str
     data: dict[str, Any]
+    # Optional category; drives the pin color in the UI. Free-form here so
+    # the project can extend the taxonomy without a backend change.
+    flag: str | None = None
+    # Optional "see also" link to another annotation on the SAME file_id.
+    linked_annotation_id: str | None = None
+
 
 class AnnotationUpdateRequest(BaseModel):
     annotation_type: str | None = None
     data: dict[str, Any] | None = None
+    flag: str | None = None
+    linked_annotation_id: str | None = None
+    # Sentinels that let the client clear a field explicitly. None on these
+    # is "no change"; True/False on _set toggles set-to-null vs leave alone.
+    clear_link: bool = False
 
 
 class AnnotationResponse(BaseModel):
@@ -283,6 +294,9 @@ class AnnotationResponse(BaseModel):
     file_id: str
     annotation_type: str
     data: dict[str, Any]
+    flag: str | None = None
+    linked_annotation_id: str | None = None
+    attachment_url: str | None = None
     created_at: datetime
 
 

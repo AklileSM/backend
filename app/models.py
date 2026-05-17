@@ -313,6 +313,18 @@ class Annotation(Base):
     file_id: Mapped[str] = mapped_column(ForeignKey("file_assets.id"), nullable=False)
     annotation_type: Mapped[str] = mapped_column(String(50), nullable=False)
     data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # Optional category (e.g. "safety" / "quality" / "delayed"). The UI maps
+    # this to a pin color and a small chip in the details panel.
+    flag: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Optional same-file pointer to another annotation ("see #4"). ON DELETE
+    # SET NULL so removing the referenced annotation doesn't dangle.
+    linked_annotation_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("annotations.id", ondelete="SET NULL"), nullable=True
+    )
+    # Optional image attachment (a zoom-in shot etc.) stored in MinIO under
+    # the dedicated annotation_attachments bucket.
+    attachment_bucket_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    attachment_object_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     file: Mapped[FileAsset] = relationship(back_populates="annotations")
