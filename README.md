@@ -1,8 +1,25 @@
 # A6-Stern Backend
 
+> **New here?** Read [`deployment/PROJECT_OVERVIEW.md`](../deployment/PROJECT_OVERVIEW.md) first — it's the cross-repo front page with a topic-based map of every doc in the project.
+
 FastAPI backend for the A6-Stern construction documentation platform. Handles authentication, file storage (via MinIO), point cloud conversion (via PotreeConverter), AI image analysis, and report generation.
 
 Works alongside the `frontend-next` and `deployment` repos.
+
+## Documentation map
+
+This README covers setup, configuration, and the API surface at a high level. Deeper topics live in companion docs:
+
+| Doc | Covers |
+|---|---|
+| [PERMISSIONS.md](PERMISSIONS.md) | Per-endpoint authorization matrix (admin, owner, editor, viewer, anonymous) |
+| [AUTH_AND_EMAIL.md](AUTH_AND_EMAIL.md) | JWT, email verification, password reset, SMTP config |
+| [FILES.md](FILES.md) | Explorer, search, bulk operations, pointcloud upload paths |
+| [REPORTS.md](REPORTS.md) | Report and draft lifecycle, PDF storage |
+| [ANNOTATIONS.md](ANNOTATIONS.md) | Annotation data model, attachments, linked annotations |
+| [PROJECTS.md](PROJECTS.md) | Projects, rooms, members, floorplans, activity feed |
+| [AI.md](AI.md) | Vision analysis flow, caching, model swap, benchmarks |
+| [migrations/README.md](migrations/README.md) | How code-driven schema migrations work |
 
 ## Prerequisites
 
@@ -100,7 +117,29 @@ On every start the backend runs these steps in order before accepting requests:
 | `/api/reports`     | Report and draft CRUD, PDF generation             |
 | `/api/annotations` | Annotation CRUD per file                          |
 | `/api/admin`       | User and project administration (admin only)      |
-| `/api/health`      | Health check (storage connectivity included)      |
+| `/api/health`      | Health check (see below)                          |
+
+## Health endpoint
+
+`GET /api/health` (also reachable at `/health` without the prefix) returns:
+
+```json
+{
+  "status": "ok",
+  "app": "A6 Stern",
+  "environment": "development",
+  "storage": true
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `status` | Always `"ok"` — if FastAPI is responding, this endpoint cannot fail without 500 |
+| `app` | Value of `APP_NAME` setting |
+| `environment` | Value of `APP_ENV` setting (`development`, `production`, …) |
+| `storage` | `true` if MinIO is reachable from the backend (a HEAD on the API endpoint succeeded), `false` otherwise |
+
+Use this for liveness probes / load balancer health checks. It does **not** check Postgres — if the DB is down, any other endpoint will fail visibly. Add a `SELECT 1` check here if you want a combined-health probe.
 
 
 ## File uploads
