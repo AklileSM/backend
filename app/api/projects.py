@@ -550,9 +550,10 @@ def get_project_activity(
 ) -> list[ProjectActivityEntry]:
     """Latest N activity entries for a project, newest first.
 
-    Any project member (or a global admin) can read the feed — same gate
-    as listing rooms. Caps `limit` at 200 so a bad client can't pull the
-    whole table at once.
+    Restricted to project owners and editors (plus global admins). Viewers
+    don't see the audit log — it leaks information about who else is
+    active in the project, which a read-only collaborator doesn't need.
+    Caps `limit` at 200 so a bad client can't pull the whole table.
     """
     project = db.scalar(select(Project).where(Project.slug == slug))
     if project is None:
@@ -564,8 +565,11 @@ def get_project_activity(
                 ProjectMember.user_id == current_user.id,
             )
         )
-        if member is None:
-            raise HTTPException(status_code=403, detail="Not a member of this project")
+        if member is None or member.role not in ("owner", "editor"):
+            raise HTTPException(
+                status_code=403,
+                detail="Only project owners and editors can view activity",
+            )
 
     capped = max(1, min(limit or 50, 200))
     rows = db.scalars(
