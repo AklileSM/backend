@@ -159,6 +159,21 @@ class UploadResponse(BaseModel):
     capture_date: date
 
 
+class BulkFileIdsRequest(BaseModel):
+    ids: list[str]
+
+
+class BulkActionResponse(BaseModel):
+    """Result of a bulk operation across many file_assets.
+
+    Numbers are: how many succeeded, how many were skipped because the user
+    isn't allowed / the row was gone / it wasn't downloadable.
+    """
+
+    affected: int
+    skipped: int
+
+
 class PrecheckHashRequest(BaseModel):
     sha256_hash: str
 
