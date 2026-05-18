@@ -1,6 +1,6 @@
 # AI Vision Analysis
 
-A single endpoint — `POST /api/ai/analyze` — that sends an image to a vision model and returns a text description. Used by the static image viewer's "AI Analysis" button and by the report builder's "Visual / AI-assisted description" section.
+A single endpoint, `POST /api/ai/analyze`, that sends an image to a vision model and returns a text description. Used by the static image viewer's "AI Analysis" button and by the report builder's "Visual / AI-assisted description" section.
 
 ## Endpoint
 
@@ -22,11 +22,11 @@ HTTP 200
 HTTP 200
 { "description": "…", "cached": true }
 
-// Background generation in progress — poll again
+// Background generation in progress, poll again
 HTTP 202
 { "status": "generating", "message": "Analysis in progress, please wait" }
 
-// Bad input — image not found, wrong media_type, invalid URL
+// Bad input, image not found, wrong media_type, invalid URL
 HTTP 400 { "detail": "..." }
 
 // Vision API failed (network, auth, model error)
@@ -112,7 +112,7 @@ For Qwen3-VL and similar "thinking" models that emit `<think>…</think>` blocks
 
 1. Strips inline `<think>...</think>` blocks (keeps the visible text).
 2. If the visible text is empty, falls back to `message.reasoning` / `message.thinking`.
-3. Inside that fallback, looks for the last `SCENE:` heading and trims to that — the model embeds the structured report at the end of its reasoning chain.
+3. Inside that fallback, looks for the last `SCENE:` heading and trims to that, the model embeds the structured report at the end of its reasoning chain.
 
 If your model never emits `<think>` blocks (most non-thinking models), the fallback path is never reached.
 
@@ -138,7 +138,7 @@ The body sent to the vision API:
 }
 ```
 
-The high `frequency_penalty` discourages repetition across the three sections — Qwen3-VL otherwise tends to restate the same observation in QUALITY and SAFETY.
+The high `frequency_penalty` discourages repetition across the three sections, Qwen3-VL otherwise tends to restate the same observation in QUALITY and SAFETY.
 
 ## Benchmark scripts
 
@@ -168,7 +168,7 @@ If you are evaluating a new model:
 2. Run the script most relevant to what you want to measure.
 3. Output is printed to stdout; redirect to a file to save results.
 
-These scripts are unmaintained — feel free to delete the variants you don't need, or move them to `scripts/benchmark/` for clarity. They are not imported anywhere in `app/`.
+These scripts are unmaintained, feel free to delete the variants you don't need, or move them to `scripts/benchmark/` for clarity. They are not imported anywhere in `app/`.
 
 ## Failure modes
 
@@ -186,7 +186,7 @@ These scripts are unmaintained — feel free to delete the variants you don't ne
 
 - Cost money (if you are paying per-token to a hosted provider).
 - Pull bytes from MinIO via `file_id`.
-- Cause the backend to fetch an arbitrary HTTP URL server-side (`image_url`-resolution path 4). Mitigated by `_host_is_private_or_local`, which blocks loopback/private IPs — but the backend will still fetch external HTTP URLs.
+- Cause the backend to fetch an arbitrary HTTP URL server-side (`image_url`-resolution path 4). Mitigated by `_host_is_private_or_local`, which blocks loopback/private IPs, but the backend will still fetch external HTTP URLs.
 
 If you deploy this on the public internet, add `Depends(get_current_user)` to the route and reconsider whether you want unauthenticated public-URL fetching at all. Same fix as for the file-content endpoints, though those are intentionally public.
 

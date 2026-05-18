@@ -2,10 +2,10 @@
 
 This document explains exactly who can call what. Authorization happens at two layers:
 
-1. **Global admin** — `User.is_admin` (re-read from the DB on every request, JWT claim ignored).
-2. **Project membership** — `project_members.role` ∈ `{owner, editor, viewer}`. Global admins bypass membership checks.
+1. **Global admin**: `User.is_admin` (re-read from the DB on every request, JWT claim ignored).
+2. **Project membership**: `project_members.role` ∈ `{owner, editor, viewer}`. Global admins bypass membership checks.
 
-> **Reports and drafts are scoped to the creator** — see `REPORTS.md`. Even admins cannot list, view, download, or delete another user's reports or drafts.
+> **Reports and drafts are scoped to the creator**: see `REPORTS.md`. Even admins cannot list, view, download, or delete another user's reports or drafts.
 
 ## Roles
 
@@ -37,9 +37,9 @@ Legend:
 - 🅴 owner or editor
 - 👤 the request's own user
 - ❌ never allowed
-- — anonymous request is rejected before reaching the route
+- Anonymous request is rejected before reaching the route
 
-### `/api/auth` — `auth.py`
+### `/api/auth`, `auth.py`
 
 | Endpoint | Anonymous | User | Admin | Notes |
 |---|---|---|---|---|
@@ -54,7 +54,7 @@ Legend:
 
 See `AUTH_AND_EMAIL.md` for the full token lifecycle.
 
-### `/api/admin` — `admin.py`
+### `/api/admin`, `admin.py`
 
 All routes use `Depends(require_admin)` (`deps.py:36`) except `user-search`.
 
@@ -67,7 +67,7 @@ All routes use `Depends(require_admin)` (`deps.py:36`) except `user-search`.
 | `GET    /projects` | ❌ 403 | ✅ | Lists every project |
 | `DELETE /projects/{id}` | ❌ 403 | ✅ | Hard-deletes; cascades to rooms, files, memberships |
 
-### `/api/projects` — `projects.py`
+### `/api/projects`, `projects.py`
 
 `_get_member_or_403` returns `None` for admins (admins bypass), or the `ProjectMember` row for everyone else (403 if no membership).
 
@@ -92,9 +92,9 @@ All routes use `Depends(require_admin)` (`deps.py:36`) except `user-search`.
 | `DELETE /{id}/members/{uid}` | ❌ | ❌ 403 | ✅ if `uid==self` | ✅ if `uid==self` | ✅ | ✅ |
 | `GET    /by-slug/{slug}/activity` | ❌ | ❌ 403 | ❌ 403 | ✅ | ✅ | ✅ |
 
-> `GET /{id}/floorplan` returns the floorplan image without an auth check — there is no `Depends(get_current_user)` on the route. The floorplan endpoint is effectively public so the browser can fetch it as a normal `<img>` src.
+> `GET /{id}/floorplan` returns the floorplan image without an auth check, there is no `Depends(get_current_user)` on the route. The floorplan endpoint is effectively public so the browser can fetch it as a normal `<img>` src.
 
-### `/api/rooms` — `rooms.py`
+### `/api/rooms`, `rooms.py`
 
 These are **public** (no `get_current_user`). Used by the file explorer to enumerate rooms across all projects without an auth round-trip.
 
@@ -103,7 +103,7 @@ These are **public** (no `get_current_user`). Used by the file explorer to enume
 | `GET /` | ✅ everyone |
 | `GET /{room_slug}` | ✅ everyone |
 
-### `/api/files` — `files.py`
+### `/api/files`, `files.py`
 
 Most file endpoints are public-by-design so thumbnails, image content, and PDF pages load via plain `<img>` and `<iframe>` tags. The narrower endpoints are gated:
 
@@ -126,7 +126,7 @@ Most file endpoints are public-by-design so thumbnails, image content, and PDF p
 
 > Single-file download (`/content`) is **not gated**. If you need that locked down, gate it on auth + project membership. The bulk-download endpoint is gated because it is a higher-value exfiltration target.
 
-### `/api/upload` — `upload.py`
+### `/api/upload`, `upload.py`
 
 All routes require auth. `_require_can_upload` enforces project owner/editor (or global admin); `require_user_can_upload` enforces global admin.
 
@@ -140,15 +140,15 @@ All routes require auth. `_require_can_upload` enforces project owner/editor (or
 | `POST /pointcloud/direct-complete` | — | — | ✅ | ✅ | ✅ |
 | `POST /single` | ❌ 403 | ❌ 403 | ✅ | ✅ | ✅ |
 
-> `pointcloud/chunk` only verifies that the session directory exists — it does **not** re-check membership on each chunk. The session ID acts as the bearer token for chunk submission. If you need stricter chunk auth, add a membership re-check inside `upload_pointcloud_chunk`.
+> `pointcloud/chunk` only verifies that the session directory exists, it does **not** re-check membership on each chunk. The session ID acts as the bearer token for chunk submission. If you need stricter chunk auth, add a membership re-check inside `upload_pointcloud_chunk`.
 
-### `/api/ai` — `ai.py`
+### `/api/ai`, `ai.py`
 
-`POST /analyze` has **no auth dependency** — fully public at the API level. The frontend protects it via `ProtectedRoute`, but anyone who hits the route directly can analyze an image (and trigger an outbound vision-API call). See `AI.md` for the abuse-surface discussion.
+`POST /analyze` has **no auth dependency**, fully public at the API level. The frontend protects it via `ProtectedRoute`, but anyone who hits the route directly can analyze an image (and trigger an outbound vision-API call). See `AI.md` for the abuse-surface discussion.
 
-### `/api/reports` — `reports.py`
+### `/api/reports`, `reports.py`
 
-All endpoints require auth; ownership is enforced by `created_by == current_user.id`. **Admins do not bypass this** — the privacy boundary is per-user.
+All endpoints require auth; ownership is enforced by `created_by == current_user.id`. **Admins do not bypass this**, the privacy boundary is per-user.
 
 | Endpoint | User (own) | User (other's) | Admin (other's) |
 |---|---|---|---|
@@ -160,7 +160,7 @@ All endpoints require auth; ownership is enforced by `created_by == current_user
 | `*  /viewer-drafts*` | ✅ | ❌ 404 | ❌ 404 |
 | `*  /comparison-drafts*` | ✅ | ❌ 404 | ❌ 404 |
 
-### `/api/annotations` — `annotations.py`
+### `/api/annotations`, `annotations.py`
 
 | Endpoint | Anonymous | User |
 |---|---|---|
@@ -176,7 +176,7 @@ All endpoints require auth; ownership is enforced by `created_by == current_user
 
 ### `/api/media`
 
-Generic proxy under a `path:path` route — public, used for legacy asset paths.
+Generic proxy under a `path:path` route, public, used for legacy asset paths.
 
 ### `/api/health`
 
@@ -188,7 +188,7 @@ Public.
 - Upload privilege check: `app/api/upload.py:91` `_require_can_upload` (per-file project membership) and `app/api/deps.py:42` `require_user_can_upload` (global admin)
 - File delete gate: `app/api/files.py:159` `_can_delete_file`
 - Project membership check: `app/api/projects.py:83` `_get_member_or_403`
-- Report ownership filter: see `app/api/reports.py` — all list/get queries include `.where(Report.created_by == current_user.id)`
+- Report ownership filter: see `app/api/reports.py`, all list/get queries include `.where(Report.created_by == current_user.id)`
 
 ## How to extend
 

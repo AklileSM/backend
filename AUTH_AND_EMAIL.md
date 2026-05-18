@@ -11,12 +11,12 @@ Covers the full auth surface: registration, login, JWT lifecycle, email verifica
 | Lifetime | 7 days (10,080 minutes) |
 | Header claim | `type=access` (rejected if not present) |
 | `sub` claim | `User.id` |
-| Refresh | None — clients re-login when the token expires |
+| Refresh | None, clients re-login when the token expires |
 
 ### Issuing
 
 A token is issued by:
-- `POST /api/auth/register` — also returns the new user
+- `POST /api/auth/register`, also returns the new user
 - `POST /api/auth/login`
 
 No other route issues tokens. The reset/verification endpoints **never** return a JWT; the user must log in again after resetting.
@@ -31,7 +31,7 @@ No other route issues tokens. The reset/verification endpoints **never** return 
 4. Loads the user from the DB by `sub`. Missing → 401.
 5. Rejects if `is_active=False` → 403 ("Account disabled").
 
-**Important:** the user's `is_admin` flag is read from the DB on every request. The JWT's `is_admin` claim is **not** used for authorization — role changes take effect immediately, no re-login required.
+**Important:** the user's `is_admin` flag is read from the DB on every request. The JWT's `is_admin` claim is **not** used for authorization, role changes take effect immediately, no re-login required.
 
 ## Registration
 
@@ -66,7 +66,7 @@ POST /api/auth/register   {username, password, email?}
 
 ```
 1. POST /api/auth/request-password-reset {email}
-   ├─ email not found OR is_active=False → 204 (silent — anti-enumeration)
+   ├─ email not found OR is_active=False → 204 (silent, anti-enumeration)
    └─ found → password_reset_token written, send_password_reset_email()
               token TTL: 1 hour
 2. User clicks link in email
@@ -80,17 +80,17 @@ POST /api/auth/register   {username, password, email?}
 4. User logs in with new password (no JWT issued by reset endpoint)
 ```
 
-Tokens are random 256-bit values (`secrets.token_urlsafe(32)`). They are single-use — successful reset clears the row's `password_reset_token`.
+Tokens are random 256-bit values (`secrets.token_urlsafe(32)`). They are single-use, successful reset clears the row's `password_reset_token`.
 
 ## Account enumeration prevention
 
-`request-password-reset` returns 204 whether or not the email exists. The verification endpoint, however, returns 400 on invalid tokens — that's fine because the token itself is opaque and unguessable.
+`request-password-reset` returns 204 whether or not the email exists. The verification endpoint, however, returns 400 on invalid tokens, that's fine because the token itself is opaque and unguessable.
 
 If you want to harden verification too (e.g., to prevent "is this token in our system?" probes), return 204 instead of 400.
 
 ## SMTP configuration
 
-Email sending is implemented in `app/services/email.py`. The module is **best-effort**: any SMTP error is logged and returns `False`. **Registration and password reset still succeed** even when email fails to send — the user just doesn't get a link.
+Email sending is implemented in `app/services/email.py`. The module is **best-effort**: any SMTP error is logged and returns `False`. **Registration and password reset still succeed** even when email fails to send, the user just doesn't get a link.
 
 ### Required env vars (for real delivery)
 
@@ -110,7 +110,7 @@ Email sending is implemented in `app/services/email.py`. The module is **best-ef
 `SMTP_HOST` empty → every `send_email` call logs:
 
 ```
-WARNING  SMTP_HOST not configured — skipping email to user@example.com (Verify your email address — A6 Stern)
+WARNING  SMTP_HOST not configured, skipping email to user@example.com (Verify your email address, A6 Stern)
 ```
 
 You can still complete the full token flow without SMTP by reading the token from the database via pgAdmin:
@@ -124,10 +124,10 @@ Then call the corresponding endpoint with that token. This is the recommended wa
 
 ### Tested providers
 
-- **Resend** — `SMTP_HOST=smtp.resend.com`, `SMTP_PORT=587`, `SMTP_USERNAME=resend`, `SMTP_PASSWORD=<api-key>`, `SMTP_USE_TLS=true`
-- **Postmark** — `smtp.postmarkapp.com:587`, username = API token, password = API token, STARTTLS
-- **Mailgun** — `smtp.mailgun.org:587`, STARTTLS
-- **Gmail** — `smtp.gmail.com:587`, STARTTLS, **App Password** (not the account password)
+- **Resend**: `SMTP_HOST=smtp.resend.com`, `SMTP_PORT=587`, `SMTP_USERNAME=resend`, `SMTP_PASSWORD=<api-key>`, `SMTP_USE_TLS=true`
+- **Postmark**: `smtp.postmarkapp.com:587`, username = API token, password = API token, STARTTLS
+- **Mailgun**: `smtp.mailgun.org:587`, STARTTLS
+- **Gmail**: `smtp.gmail.com:587`, STARTTLS, **App Password** (not the account password)
 
 ### `FRONTEND_URL` must be browser-reachable
 
@@ -142,4 +142,4 @@ The frontend stores `{ accessToken, user }` in `localStorage` under `a6_auth_v2`
 - Set a strong random `JWT_SECRET` (32+ bytes). Tokens issued under the old secret are invalidated on rotation.
 - Configure SMTP before user-facing rollout if you want email verification to be meaningful.
 - Set `FRONTEND_URL` to the public address.
-- After rotation of any user's password externally (e.g., compromised account), no further action is needed — JWTs do not include a password hash, but if you want to **force re-login**, also rotate `JWT_SECRET`.
+- After rotation of any user's password externally (e.g., compromised account), no further action is needed, JWTs do not include a password hash, but if you want to **force re-login**, also rotate `JWT_SECRET`.

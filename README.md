@@ -1,6 +1,6 @@
 # A6-Stern Backend
 
-> **New here?** Read [`deployment/PROJECT_OVERVIEW.md`](../deployment/PROJECT_OVERVIEW.md) first — it's the cross-repo front page with a topic-based map of every doc in the project.
+> **New here?** Read [`deployment/PROJECT_OVERVIEW.md`](../deployment/PROJECT_OVERVIEW.md) first, it's the cross-repo front page with a topic-based map of every doc in the project.
 
 FastAPI backend for the A6-Stern construction documentation platform. Handles authentication, file storage (via MinIO), point cloud conversion (via PotreeConverter), AI image analysis, and report generation.
 
@@ -39,7 +39,7 @@ source venv/bin/activate
 
 pip install -r requirements.txt
 cp .env.example .env
-# Edit .env — set DB_*, MINIO_*, and at minimum MINIO_ACCESS_KEY / MINIO_SECRET_KEY
+# Edit .env, set DB_*, MINIO_*, and at minimum MINIO_ACCESS_KEY / MINIO_SECRET_KEY
 python run.py
 ```
 
@@ -134,12 +134,12 @@ On every start the backend runs these steps in order before accepting requests:
 
 | Field | Meaning |
 |---|---|
-| `status` | Always `"ok"` — if FastAPI is responding, this endpoint cannot fail without 500 |
+| `status` | Always `"ok"`, if FastAPI is responding, this endpoint cannot fail without 500 |
 | `app` | Value of `APP_NAME` setting |
 | `environment` | Value of `APP_ENV` setting (`development`, `production`, …) |
 | `storage` | `true` if MinIO is reachable from the backend (a HEAD on the API endpoint succeeded), `false` otherwise |
 
-Use this for liveness probes / load balancer health checks. It does **not** check Postgres — if the DB is down, any other endpoint will fail visibly. Add a `SELECT 1` check here if you want a combined-health probe.
+Use this for liveness probes / load balancer health checks. It does **not** check Postgres, if the DB is down, any other endpoint will fail visibly. Add a `SELECT 1` check here if you want a combined-health probe.
 
 
 ## File uploads
@@ -150,7 +150,7 @@ Admins, project owners, and project editors can upload files. Viewers cannot.
 
 **Size limit:** configured via `MAX_UPLOAD_SIZE_BYTES` (default 5 GB)
 
-**Duplicate detection:** every file is SHA-256 hashed on upload. If an identical file already exists anywhere in the system the upload is rejected with HTTP 409 and a message identifying where the duplicate lives. This is a global check — the same file cannot be uploaded twice even to a different room or project.
+**Duplicate detection:** every file is SHA-256 hashed on upload. If an identical file already exists anywhere in the system the upload is rejected with HTTP 409 and a message identifying where the duplicate lives. This is a global check, the same file cannot be uploaded twice even to a different room or project.
 
 **Display names:** files are renamed at upload time to `<room-slug>-<YYYYMMDD>-<NNN>.<ext>` (e.g. `room1-20260401-003.jpg`). The sequence number `NNN` is per room+date+media_type, so images, videos, and PDFs each have independent sequences. The original filename is preserved in `original_name`.
 
@@ -301,7 +301,7 @@ python scripts/migrate_legacy_assets.py --frontend-public-dir /path/to/frontend/
 LEGACY_FRONTEND_PUBLIC_DIR=/path/to/frontend/public python scripts/migrate_legacy_assets.py
 
 # If backend and frontend repos are cloned side-by-side, the script finds
-# ../frontend/public automatically — no argument needed.
+# ../frontend/public automatically, no argument needed.
 python scripts/migrate_legacy_assets.py
 ```
 
@@ -384,7 +384,7 @@ def admin_client(client):
 
 ### What to mock
 
-MinIO storage interactions — mock `app.services.storage.storage_service` at the module level. Do not test against a real MinIO instance in unit tests; save that for integration tests.
+MinIO storage interactions, mock `app.services.storage.storage_service` at the module level. Do not test against a real MinIO instance in unit tests; save that for integration tests.
 
 ```python
 from unittest.mock import MagicMock, patch
@@ -407,10 +407,10 @@ All error responses use the FastAPI default shape: `{"detail": "<message>"}`.
 | `401` | No `Authorization` header; token scheme is not `Bearer`; JWT is expired, malformed, or has wrong `type` claim                                                                                                                                         |
 | `403` | Account is disabled (`is_active=False`); user is not an admin on an admin-only route; user lacks `owner` or `editor` role on the target project for upload/delete                                                                                     |
 | `404` | Room, file asset, or upload session not found; point cloud not yet converted (Potree files missing); thumbnail or content object missing in MinIO                                                                                                     |
-| `409` | SHA-256 duplicate — the exact same file has already been uploaded (response body names the room and date where it lives); retry requested for a conversion whose status is not `"failed"`; retry requested after the original LAZ was already deleted |
-| `413` | File exceeds `MAX_UPLOAD_SIZE_BYTES` (default 5 GB) — checked both during streaming and during chunk reassembly                                                                                                                                       |
+| `409` | SHA-256 duplicate, the exact same file has already been uploaded (response body names the room and date where it lives); retry requested for a conversion whose status is not `"failed"`; retry requested after the original LAZ was already deleted |
+| `413` | File exceeds `MAX_UPLOAD_SIZE_BYTES` (default 5 GB), checked both during streaming and during chunk reassembly                                                                                                                                       |
 | `416` | `Range` header requests bytes beyond the end of the file                                                                                                                                                                                              |
-| `422` | Pydantic validation error — missing or wrong-typed request body / form field (FastAPI generated)                                                                                                                                                      |
+| `422` | Pydantic validation error, missing or wrong-typed request body / form field (FastAPI generated)                                                                                                                                                      |
 | `500` | Conversion queue submission error when the pool is not initialised                                                                                                                                                                                    |
 | `502` | Cannot download original LAZ from MinIO when retrying a failed conversion                                                                                                                                                                             |
 | `503` | Converter process pool refuses the retry submission                                                                                                                                                                                                   |

@@ -36,7 +36,7 @@ ViewerReportDraft  ──────► state_json updated  ──────�
 - **Drafts persist viewer state** (`state_json`) between sessions. A user can reopen a viewer, restore context from the draft, and continue editing before publishing.
 - **Updating a draft** (`PATCH`) clears any previously stored draft PDF from MinIO (the draft PDF is a preview; the final PDF is generated fresh at publish time).
 - **Publishing** generates the PDF client-side, uploads it to the `construction-reports` bucket, creates a `Report` record, and deletes the draft.
-- A draft that was never published can be deleted at any time — its associated PDF preview (if any) is cleaned up from MinIO.
+- A draft that was never published can be deleted at any time, its associated PDF preview (if any) is cleaned up from MinIO.
 
 ## viewer_kind values
 

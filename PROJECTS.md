@@ -67,7 +67,7 @@ A project has at most one floorplan image, stored in the `construction-floorplan
 
 ### `GET /api/projects/{id}/floorplan`
 
-**Public** — no auth required, by design. The browser loads it as a normal `<img>` src. Sends `ETag` and `Cache-Control: public, max-age=86400`; honors `If-None-Match` with 304.
+**Public**: no auth required, by design. The browser loads it as a normal `<img>` src. Sends `ETag` and `Cache-Control: public, max-age=86400`; honors `If-None-Match` with 304.
 
 ### `POST /api/projects/{id}/floorplan` (multipart `file`)
 
@@ -132,7 +132,7 @@ Owner only. Changes the target member's role.
 ### `DELETE /api/projects/{id}/members/{user_id}`
 
 - Owners can remove anyone.
-- Any other member can remove **themselves** (used by the "leave project" button) — note that `user_id` in the path must equal the caller's id.
+- Any other member can remove **themselves** (used by the "leave project" button), note that `user_id` in the path must equal the caller's id.
 - Logs `action=member.remove`.
 
 > Removing the last owner of a project is **not** prevented in code today. If you want that guard, add a count check in `remove_member`.
@@ -169,7 +169,7 @@ Returns newest first. Used by the project home page's activity sidebar.
 | `member.add` | `POST /api/projects/{id}/members` | `added_username`, `role` |
 | `member.remove` | `DELETE /api/projects/{id}/members/{uid}` | `removed_username` |
 
-To log more actions, call `app.services.activity.log_activity(...)` from the relevant endpoint. The shape is uniform — `action`, `target_type`, `target_id`, `metadata` (dict).
+To log more actions, call `app.services.activity.log_activity(...)` from the relevant endpoint. The shape is uniform, `action`, `target_type`, `target_id`, `metadata` (dict).
 
 ## Default seed data
 
@@ -178,7 +178,7 @@ On first boot, `app/services/bootstrap.py::seed_defaults` creates:
 - 3 projects: `A6 Stern`, `Project X`, `Project Y`.
 - 6 rooms under `A6 Stern`: `room1`–`room6`.
 
-Idempotent — only inserts if the slugs don't already exist.
+Idempotent, only inserts if the slugs don't already exist.
 
 ## Where the code lives
 

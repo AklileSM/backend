@@ -4,7 +4,7 @@ Annotations are point-of-interest markers placed on a file (typically an image) 
 
 The matching frontend doc is `frontend-next/ANNOTATIONS.md`.
 
-## Data model — `Annotation`
+## Data model: `Annotation`
 
 ```python
 class Annotation:
@@ -29,7 +29,7 @@ class Annotation:
 }
 ```
 
-The backend never reads `x`/`y` — they only matter to the rendering UI.
+The backend never reads `x`/`y`, they only matter to the rendering UI.
 
 ## Flag taxonomy
 
@@ -40,7 +40,7 @@ Same three-flag system used by reports (see `REPORTS.md`):
 | `safety`   | Safety concern |
 | `quality`  | Quality / workmanship concern |
 | `delayed`  | Schedule delay indicated |
-| `null`     | Uncategorized — renders as a neutral pin |
+| `null`     | Uncategorized, renders as a neutral pin |
 
 The validator (`_validate_flag` at `annotations.py:52`) trims, lower-cases, and rejects anything else with **400**.
 
@@ -85,7 +85,7 @@ This avoids embedding expiring URLs in annotation responses and keeps the bucket
 | `POST`   | `/api/annotations/` | user | Create annotation. Logs an `annotation.create` activity entry |
 | `PATCH`  | `/api/annotations/{id}` | user | Update any of `annotation_type`, `data`, `flag`, `linked_annotation_id`, `clear_link` |
 | `DELETE` | `/api/annotations/{id}` | user | Delete annotation and its attachment (best-effort) |
-| `POST`   | `/api/annotations/{id}/attachment` | user | Upload (or replace) the attached image — multipart `file` field |
+| `POST`   | `/api/annotations/{id}/attachment` | user | Upload (or replace) the attached image, multipart `file` field |
 | `DELETE` | `/api/annotations/{id}/attachment` | user | Drop the attached image (keeps the annotation) |
 | `GET`    | `/api/annotations/{id}/attachment` | user | Stream the attachment as its original content-type |
 
@@ -126,7 +126,7 @@ type PdfAnnotation = {
 };
 ```
 
-`ReportBuilder.tsx` pre-fetches each attachment via `/api/annotations/{id}/attachment` and converts it to a base64 data URL before calling the builder, because `jsPDF.addImage` is synchronous. Failures are silent — the PDF renders an italic "could not be embedded" note instead of crashing.
+`ReportBuilder.tsx` pre-fetches each attachment via `/api/annotations/{id}/attachment` and converts it to a base64 data URL before calling the builder, because `jsPDF.addImage` is synchronous. Failures are silent, the PDF renders an italic "could not be embedded" note instead of crashing.
 
 ## Adding author tracking
 
