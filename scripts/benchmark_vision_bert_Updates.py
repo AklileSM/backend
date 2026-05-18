@@ -1,5 +1,5 @@
 """
-Vision model benchmark — hits Ollama directly, bypasses backend cache.
+Vision model benchmark, hits Ollama directly, bypasses backend cache.
 
 What it measures
 ----------------
@@ -63,7 +63,7 @@ from app.config import get_settings  # noqa: E402
 # ── constants ────────────────────────────────────────────────────────────────
 PROMPT = (
     "You are a construction site inspector reviewing a 360-degree panoramic image captured with a wide-angle lens. "
-    "All walls, floors, and ceilings are straight and flat — any curvature is purely lens distortion, not actual curved architecture. "
+    "All walls, floors, and ceilings are straight and flat, any curvature is purely lens distortion, not actual curved architecture. "
     "Never describe surfaces as curved.\n\n"
     "Write a structured report with three sections. "
     "Only report what is directly visible in the image. "
@@ -248,7 +248,7 @@ def main() -> None:
         action="store_true",
         help=(
             "Auto-discover all *.jpg images under <image-dir>/panoramas/ "
-            "instead of using --eval-set. No reference descriptions — "
+            "instead of using --eval-set. No reference descriptions, "
             "only structure, consistency, and latency are measured."
         ),
     )

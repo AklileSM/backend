@@ -16,7 +16,7 @@ What it does
        to the images bucket and the thumbnail to the thumbnails bucket.
      - Creates a FileAsset record with metadata_json.source = "legacy-public".
 5. Walks <frontend-public-dir>/PCD/<YYYYMMDD>/ and uploads each point cloud to
-   the pointclouds bucket (no Potree conversion — originals only).
+   the pointclouds bucket (no Potree conversion, originals only).
 
 Room assignment
 ---------------

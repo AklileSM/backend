@@ -1,4 +1,4 @@
-"""Explorer endpoints — user-facing file listing.
+"""Explorer endpoints, user-facing file listing.
 
 * `/my-uploads`        — assets uploaded by the current user, project-
                           scoped optionally.
@@ -58,7 +58,7 @@ def list_my_uploads(
 
     Optional `project_slug` scopes the result to a single project; the caller
     must be a member (or a global admin). Optional `media_type` filters to one
-    of image / video / pointcloud / pdf — used by the profile page to power
+    of image / video / pointcloud / pdf, used by the profile page to power
     its Images / Videos / PDFs side-rail.
 
     The uploader id is stored in `file_assets.metadata_json.uploaded_by_user_id`.
@@ -116,7 +116,7 @@ def search_files(
     query = (q or "").strip()
     if not query:
         return []
-    # Cap pathological queries early — Postgres handles the rest cheaply with
+    # Cap pathological queries early, Postgres handles the rest cheaply with
     # the trigram indexes.
     if len(query) > 100:
         query = query[:100]
@@ -134,7 +134,7 @@ def search_files(
         if membership is None:
             raise HTTPException(status_code=403, detail="Not a member of this project")
 
-    # Detect "YYYY-MM-DD" — gives users a way to jump to a date directly.
+    # Detect "YYYY-MM-DD", gives users a way to jump to a date directly.
     parsed_date = None
     try:
         parsed_date = date.fromisoformat(query)
@@ -148,7 +148,7 @@ def search_files(
         func.similarity(Room.name, query),
     ).label("score")
 
-    # `op('%')` is the pg_trgm similarity operator — uses the GIN index built
+    # `op('%')` is the pg_trgm similarity operator, uses the GIN index built
     # in ensure_search_trigram_indexes(). The ILIKE clauses widen the net for
     # short prefixes that fall below the default 0.3 similarity threshold.
     match_clauses = [

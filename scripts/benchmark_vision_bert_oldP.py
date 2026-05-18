@@ -1,5 +1,5 @@
 """
-Vision model benchmark — hits Ollama directly, bypasses backend cache.
+Vision model benchmark, hits Ollama directly, bypasses backend cache.
 
 What it measures
 ----------------
@@ -235,7 +235,7 @@ def main() -> None:
         action="store_true",
         help=(
             "Auto-discover all *.jpg images under <image-dir>/panoramas/ "
-            "instead of using --eval-set. No reference descriptions — "
+            "instead of using --eval-set. No reference descriptions, "
             "only structure, consistency, and latency are measured."
         ),
     )

@@ -264,7 +264,7 @@ def _finalize_pointcloud_upload_in_background(
 
         sha256_hash = hasher.hexdigest()
 
-        # Duplicate check — exclude the placeholder row we just inserted.
+        # Duplicate check, exclude the placeholder row we just inserted.
         existing = db.scalar(
             select(FileAsset)
             .where(FileAsset.sha256_hash == sha256_hash, FileAsset.id != asset_id)
@@ -286,7 +286,7 @@ def _finalize_pointcloud_upload_in_background(
 
         asset = db.get(FileAsset, asset_id)
         if asset is None:
-            # Row was deleted from the UI while we were uploading — clean up MinIO.
+            # Row was deleted from the UI while we were uploading, clean up MinIO.
             storage_service.remove_object_best_effort(bucket_name, object_name)
             return
         asset.file_size = file_size

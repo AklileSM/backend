@@ -13,7 +13,7 @@ class User(Base):
     The first account registered via POST /api/auth/register is automatically
     granted is_admin=True; all subsequent registrations get is_admin=False.
 
-    is_active=False disables login without deleting the account — the user's
+    is_active=False disables login without deleting the account, the user's
     uploads and reports remain intact. Set via the admin panel.
     """
 
@@ -79,9 +79,9 @@ class ProjectMember(Base):
     """Many-to-many link between users and projects with a role.
 
     role must be one of: "owner" | "editor" | "viewer"
-      owner  — can manage project settings, members, and upload files
-      editor — can upload files, create annotations and reports
-      viewer — read-only access to all project content
+      owner , can manage project settings, members, and upload files
+      editor, can upload files, create annotations and reports
+      viewer, read-only access to all project content
 
     Global admins bypass this table entirely and have implicit owner-level
     access to every project.
@@ -228,10 +228,10 @@ class ViewerReportDraft(Base):
     """In-progress report from a single-file viewer (not the Compare viewer).
 
     viewer_kind identifies which viewer produced this draft:
-      "static"      — standard image viewer
-      "panorama"    — 360° panorama (Three.js sphere)
-      "pointcloud"  — Potree point cloud viewer
-      "pdf"         — PDF.js document viewer
+      "static"     , standard image viewer
+      "panorama"   , 360° panorama (Three.js sphere)
+      "pointcloud" , Potree point cloud viewer
+      "pdf"        , PDF.js document viewer
 
     state_json holds viewer-specific serialised state (camera position,
     screenshots, active page number, etc.). Schema varies by viewer_kind;
@@ -296,13 +296,13 @@ class Annotation(Base):
     """A spatial annotation attached to a file (pin, polygon, measurement, etc.).
 
     annotation_type identifies the shape kind; data holds its coordinates and
-    label. Both are defined by the frontend viewer — the backend stores them
+    label. Both are defined by the frontend viewer, the backend stores them
     opaquely without validating the schema.
 
     Common annotation_type values:
-      "pin"       — {"x": float, "y": float, "label": str}
-      "polygon"   — {"points": [[x, y], ...], "label": str}
-      "distance"  — {"start": [x, y], "end": [x, y], "metres": float}
+      "pin"      , {"x": float, "y": float, "label": str}
+      "polygon"  , {"points": [[x, y], ...], "label": str}
+      "distance" , {"start": [x, y], "end": [x, y], "metres": float}
 
     Annotations cascade-delete when their parent FileAsset is deleted.
     """
@@ -339,7 +339,7 @@ class ProjectActivity(Base):
     reason).
 
     action is a dotted string (e.g. "upload.image", "annotation.create",
-    "report.publish", "member.add", "member.remove") — kept as plain text
+    "report.publish", "member.add", "member.remove"), kept as plain text
     rather than an Enum so new actions can be added without a schema
     migration.
 
@@ -348,7 +348,7 @@ class ProjectActivity(Base):
     preview, etc.).
 
     The cascade on project_id is the load-bearing one: deleting a project
-    sweeps its activity. target_id is plain text — different tables have
+    sweeps its activity. target_id is plain text, different tables have
     different id shapes (file_assets.id is uuid, project_members has a
     composite PK).
     """

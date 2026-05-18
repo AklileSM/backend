@@ -1,4 +1,4 @@
-"""File serving — proxy streams from MinIO to the browser.
+"""File serving, proxy streams from MinIO to the browser.
 
 All four endpoints share the same model: pull the object's metadata, honour
 `Range:` headers for partial responses, honour `If-None-Match` for 304s, and
@@ -158,7 +158,7 @@ def proxy_pointcloud_file(
 ) -> PlainResponse:
     """
     Proxy individual Potree octree files (metadata.json, hierarchy.bin, octree.bin)
-    from MinIO so the browser fetches them on the same origin — no CORS config needed.
+    from MinIO so the browser fetches them on the same origin, no CORS config needed.
 
     Potree 2.x issues byte-range requests (Range: bytes=X-Y) to read specific
     chunks of hierarchy.bin and octree.bin.  We must honour these or Potree will

@@ -238,7 +238,7 @@ def _save_pointcloud_asset_and_queue_conversion(
     display_name: str,
     sha256_hash: str | None = None,
 ) -> UploadResponse:
-    """Synchronous variant — still used by the small/direct upload paths.
+    """Synchronous variant, still used by the small/direct upload paths.
 
     The chunked `/complete` endpoint uses the streaming background variant
     in `pointcloud_chunked.py` so the HTTP response doesn't outlast
@@ -266,11 +266,11 @@ def _save_pointcloud_asset_and_queue_conversion(
     db.refresh(asset)
 
     try:
-        # Runs in a separate process — does not block the web server.
+        # Runs in a separate process, does not block the web server.
         # Temp file is cleaned up by convert_pointcloud_background.
         submit_conversion(asset.id, local_path_for_conversion)
     except Exception as exc:
-        # Pool not ready or other submission error — remove the orphaned asset
+        # Pool not ready or other submission error, remove the orphaned asset
         # so the user can retry rather than being stuck at "pending" forever.
         try:
             db.delete(asset)

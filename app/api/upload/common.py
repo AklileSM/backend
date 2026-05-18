@@ -24,7 +24,7 @@ from app.services.activity import log_activity
 
 settings = get_settings()
 
-# Frontend dispatches on these four — any other value is rejected at the API
+# Frontend dispatches on these four, any other value is rejected at the API
 # boundary with 400.
 _ALLOWED_MEDIA = frozenset({"image", "video", "pointcloud", "pdf"})
 

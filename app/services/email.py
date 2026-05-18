@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 def send_email(to: str, subject: str, html_body: str) -> bool:
     settings = get_settings()
     if not settings.smtp_host:
-        logger.warning("SMTP_HOST not configured — skipping email to %s (%s)", to, subject)
+        logger.warning("SMTP_HOST not configured, skipping email to %s (%s)", to, subject)
         return False
 
     msg = MIMEMultipart("alternative")
@@ -56,7 +56,7 @@ def send_verification_email(to: str, token: str) -> None:
 <p><a href="{verify_url}">{verify_url}</a></p>
 <p>This link expires in 7 days. If you did not create an account, you can ignore this email.</p>
 """
-    send_email(to, "Verify your email address — A6 Stern", html)
+    send_email(to, "Verify your email address, A6 Stern", html)
 
 
 def send_password_reset_email(to: str, token: str) -> None:
@@ -68,4 +68,4 @@ def send_password_reset_email(to: str, token: str) -> None:
 <p><a href="{reset_url}">{reset_url}</a></p>
 <p>This link expires in 1 hour. If you did not request a reset, you can safely ignore this email.</p>
 """
-    send_email(to, "Reset your password — A6 Stern", html)
+    send_email(to, "Reset your password, A6 Stern", html)

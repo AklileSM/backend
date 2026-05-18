@@ -147,7 +147,7 @@ def create_project(
 
 
 # ---------------------------------------------------------------------------
-# Slug-based lookup — must be defined before /{project_id}
+# Slug-based lookup, must be defined before /{project_id}
 # ---------------------------------------------------------------------------
 
 @router.get("/by-slug/{slug}", response_model=ProjectResponse)
@@ -551,7 +551,7 @@ def get_project_activity(
     """Latest N activity entries for a project, newest first.
 
     Restricted to project owners and editors (plus global admins). Viewers
-    don't see the audit log — it leaks information about who else is
+    don't see the audit log, it leaks information about who else is
     active in the project, which a read-only collaborator doesn't need.
     Caps `limit` at 200 so a bad client can't pull the whole table.
     """

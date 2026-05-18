@@ -1,4 +1,4 @@
-"""POST /single — single-request upload for images, videos, and PDFs.
+"""POST /single, single-request upload for images, videos, and PDFs.
 
 Pointcloud uploads also enter through this route (the frontend sends
 ``media_type=pointcloud``) but delegate to `_upload_pointcloud` below, which
@@ -264,7 +264,7 @@ async def _upload_pointcloud(
     db.commit()
     db.refresh(asset)
 
-    # Submit to the process pool — runs in a separate process, does not block
+    # Submit to the process pool, runs in a separate process, does not block
     # the web server. Temp file is cleaned up by convert_pointcloud_background.
     submit_conversion(asset.id, tmp_path)
 

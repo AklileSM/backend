@@ -169,7 +169,7 @@ def bulk_download_files(
         with zipfile.ZipFile(tmp.name, mode="w", compression=zipfile.ZIP_STORED) as zf:
             for asset in assets:
                 if not _can_delete_file(current_user, asset, db):
-                    # Same gate as delete — viewers shouldn't be able to bulk
+                    # Same gate as delete, viewers shouldn't be able to bulk
                     # exfiltrate either. Single-file download endpoint stays
                     # open for them.
                     skipped += 1

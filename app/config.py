@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # All presigned GET and PUT URLs will use this base instead of the internal minio_server address.
     # Without this, browsers block image/file requests because the internal IP is unreachable.
     minio_public_url: str = ""
-    # Kept for backward compatibility — minio_public_url takes priority when both are set.
+    # Kept for backward compatibility, minio_public_url takes priority when both are set.
     minio_public_upload_base_url: str = ""
 
     vision_api_key: str = ""
@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     cors_extra_origins: str = ""
     presigned_url_expiry_seconds: int = 604800
-    max_upload_size_bytes: int = 5368709120  # 5 GB — large enough for LAZ point clouds
+    max_upload_size_bytes: int = 5368709120  # 5 GB, large enough for LAZ point clouds
     #: After Potree conversion succeeds, delete the uploaded LAZ/LAS from MinIO (viewer uses _potree/ only).
     #: Set DELETE_ORIGINAL_POINTCLOUD_AFTER_CONVERSION=false to keep originals for re-convert / archive.
     delete_original_pointcloud_after_conversion: bool = True

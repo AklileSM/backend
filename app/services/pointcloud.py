@@ -58,7 +58,7 @@ def reset_interrupted_conversions() -> None:
             if status in ("uploading", "pending", "processing"):
                 meta = dict(asset.metadata_json or {})
                 meta["conversion_status"] = "failed"
-                meta["conversion_error"] = "Conversion interrupted by server restart — please re-upload."
+                meta["conversion_error"] = "Conversion interrupted by server restart, please re-upload."
                 asset.metadata_json = meta
                 reset_count += 1
         if reset_count:
@@ -87,7 +87,7 @@ def submit_conversion(asset_id: str, laz_tmp_path: str) -> None:
     block FastAPI's async event loop or thread pool.
     """
     if _converter_pool is None:
-        raise RuntimeError("Converter pool is not initialised — call init_converter_pool() at startup")
+        raise RuntimeError("Converter pool is not initialised, call init_converter_pool() at startup")
     _converter_pool.submit(convert_pointcloud_background, asset_id, laz_tmp_path)
     logger.info("Conversion job submitted for asset %s", asset_id)
 
@@ -141,7 +141,7 @@ def convert_pointcloud_background(asset_id: str, laz_tmp_path: str) -> None:
     # On Linux, ProcessPoolExecutor uses fork(). The forked worker inherits the
     # parent's connection pool, meaning both parent and child share the same
     # underlying TCP sockets. close=False discards the inherited pool without
-    # closing those sockets — the parent keeps its working connections, and
+    # closing those sockets, the parent keeps its working connections, and
     # this worker opens fresh ones on demand.
     engine.dispose(close=False)
 

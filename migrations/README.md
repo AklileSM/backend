@@ -6,7 +6,7 @@ A6-Stern does not use Alembic or a file-per-migration system. All schema changes
 
 ## Why
 
-- The backend can be deployed by anyone with `docker compose up -d` — no `alembic upgrade head` step required.
+- The backend can be deployed by anyone with `docker compose up -d`, no `alembic upgrade head` step required.
 - Forgotten migrations cannot block startup: every function is safe to re-run.
 - Rollbacks are not needed because every column added is nullable / defaulted.
 
@@ -41,14 +41,14 @@ Also update the corresponding SQLAlchemy model in `app/models.py` so the ORM kno
 
 ## Rules
 
-1. **Additive only.** New nullable columns, new tables, new indexes. Don't `DROP COLUMN` or rename in place — old application code rolling back to a previous deploy needs the schema it expects.
+1. **Additive only.** New nullable columns, new tables, new indexes. Don't `DROP COLUMN` or rename in place, old application code rolling back to a previous deploy needs the schema it expects.
 2. **Idempotent.** Always guard with an `information_schema` check (or `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`).
-3. **Cheap.** Migrations run on every startup. Avoid expensive locks or rewrites — use a separate one-off script for those.
+3. **Cheap.** Migrations run on every startup. Avoid expensive locks or rewrites, use a separate one-off script for those.
 4. **No `DROP` migrations.** If you truly need to drop a column, do it manually via `psql` after the rolling deploy is complete, then remove the column from the model.
 
 ## Manual rollback
 
-The migrations are additive, so application code rolling back to an older version is safe — old code ignores columns it doesn't know about. If you need to fully undo a migration:
+The migrations are additive, so application code rolling back to an older version is safe, old code ignores columns it doesn't know about. If you need to fully undo a migration:
 
 ```bash
 docker exec -it a6_stern_db psql -U postgres a6_stern

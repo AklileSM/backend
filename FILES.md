@@ -2,7 +2,7 @@
 
 Covers the file lifecycle and all endpoints under `/api/files` and `/api/upload`. The matching frontend docs are `frontend-next/EXPLORER.md` and the upload chapter in the main README.
 
-## Domain model — `FileAsset`
+## Domain model: `FileAsset`
 
 ```python
 class FileAsset:
@@ -44,7 +44,7 @@ Every upload is renamed to:
 <room-slug>-<YYYYMMDD>-<NNN>.<ext>
 ```
 
-`NNN` is per `(room_id, capture_date, media_type)` — images, videos, pdfs, and pointclouds in the same room/date each have an **independent** 1-based sequence. The original filename is preserved in `original_name`.
+`NNN` is per `(room_id, capture_date, media_type)`: images, videos, pdfs, and pointclouds in the same room/date each have an **independent** 1-based sequence. The original filename is preserved in `original_name`.
 
 Built by `_generate_display_name` (`upload.py:127`).
 
@@ -56,13 +56,13 @@ Every uploaded file is hashed during the upload. If the same hash already exists
 This file has already been uploaded to <room name> on <date> as "<display_name>".
 ```
 
-This is a global check, not per-project — by design. Implemented in `_check_duplicate` (`upload.py:179`).
+This is a global check, not per-project, by design. Implemented in `_check_duplicate` (`upload.py:179`).
 
-The `POST /api/upload/precheck-hash` endpoint lets the browser ask "would this hash be a duplicate?" before starting the actual upload — useful for very large pointclouds where you want to bail out before transferring gigabytes.
+The `POST /api/upload/precheck-hash` endpoint lets the browser ask "would this hash be a duplicate?" before starting the actual upload, useful for very large pointclouds where you want to bail out before transferring gigabytes.
 
 ## Explorer endpoints (public)
 
-These power the file grid. **No auth required** — the browser can fetch them directly. Combined with the proxy-served `/content` and `/thumbnail`, this is what makes the explorer feel snappy.
+These power the file grid. **No auth required**, the browser can fetch them directly. Combined with the proxy-served `/content` and `/thumbnail`, this is what makes the explorer feel snappy.
 
 ### `GET /api/files/explorer/dates`
 
@@ -95,7 +95,7 @@ Returns all assets captured on a specific date, **grouped by room name** (not sl
 
 ### `GET /api/files/explorer/room/{room_slug}`
 
-The inverse — all assets in one room, grouped by date.
+The inverse, all assets in one room, grouped by date.
 
 ## Authenticated explorer endpoints
 
@@ -133,9 +133,9 @@ Returns the auto-generated 400×300 thumbnail. Sends `ETag` + `Last-Modified` + 
 Returns the full original file.
 
 - Supports `Range:` requests for partial fetches (PDF viewers, video scrubbing). Returns 206 with `Content-Range`.
-- Honors `If-None-Match` with 304 — but only for full-file requests, not ranges.
+- Honors `If-None-Match` with 304, but only for full-file requests, not ranges.
 - Files ≤ 5 MB are buffered into a single response with `Content-Length`. Larger files are streamed.
-- For pointclouds with `conversion_status == "ready"`, returns 404 with "Use pointcloud routes" — the caller should use `/{id}/pointcloud/metadata.json` (or `/url`) instead.
+- For pointclouds with `conversion_status == "ready"`, returns 404 with "Use pointcloud routes", the caller should use `/{id}/pointcloud/metadata.json` (or `/url`) instead.
 
 ### `GET /api/files/{id}/url`
 
@@ -154,7 +154,7 @@ Proxy for the individual Potree output files. Only the three known filenames are
 | `hierarchy.bin` | `application/octet-stream` |
 | `octree.bin` | `application/octet-stream` |
 
-**Range requests are required** — Potree 2.x issues `Range: bytes=X-Y` to read specific chunks of `hierarchy.bin` and `octree.bin`. If you serve more bytes than requested, Potree's node-count arithmetic corrupts.
+**Range requests are required**: Potree 2.x issues `Range: bytes=X-Y` to read specific chunks of `hierarchy.bin` and `octree.bin`. If you serve more bytes than requested, Potree's node-count arithmetic corrupts.
 
 ## Delete
 
@@ -198,10 +198,10 @@ Skipped:
 Returns 404 only if **no** file in the batch could be included. Response headers:
 
 - `Content-Disposition: attachment; filename="files-<N>.zip"`
-- `X-Bulk-Affected: <N>` — written count
-- `X-Bulk-Skipped: <N>` — skipped count
+- `X-Bulk-Affected: <N>`, written count
+- `X-Bulk-Skipped: <N>`, skipped count
 
-ZIP is assembled in a temp file with `ZIP_STORED` (no compression — the originals are already compressed) and unlinked when the response finishes.
+ZIP is assembled in a temp file with `ZIP_STORED` (no compression, the originals are already compressed) and unlinked when the response finishes.
 
 ## Pointcloud lifecycle
 
@@ -233,7 +233,7 @@ POST /api/upload/pointcloud/chunk     → repeat for each chunk_index
 POST /api/upload/pointcloud/complete  → asset created, conversion queued
 ```
 
-The frontend slices the file into 32 MB chunks (the backend's `chunk_size`) and posts them in order to `/chunk`. Concurrent chunk uploads are allowed — chunks are written to disk as `00000000.part`, `00000001.part`, etc.
+The frontend slices the file into 32 MB chunks (the backend's `chunk_size`) and posts them in order to `/chunk`. Concurrent chunk uploads are allowed, chunks are written to disk as `00000000.part`, `00000001.part`, etc.
 
 `/complete` verifies every part exists, then returns immediately with the asset record. Assembly + hashing + MinIO upload happens in a daemon thread to avoid request timeouts (chunked LAS uploads can be multi-minute).
 
@@ -287,9 +287,9 @@ POST /api/upload/single
   fields: file, room_id, media_type, capture_date
 ```
 
-- `media_type ∈ {image, video, pointcloud, pdf}`. `pdf` files must have a `.pdf` extension or a PDF content-type — otherwise 400.
+- `media_type ∈ {image, video, pointcloud, pdf}`. `pdf` files must have a `.pdf` extension or a PDF content-type, otherwise 400.
 - Images get a thumbnail generated at upload time (400×300 px, JPEG quality 82) and stored in the thumbnails bucket.
-- Images also fire `generate_and_cache_ai_description` as a `BackgroundTask` — the AI description is computed asynchronously and stored on the asset row. The user can also trigger it later via `/api/ai/analyze`.
+- Images also fire `generate_and_cache_ai_description` as a `BackgroundTask`, the AI description is computed asynchronously and stored on the asset row. The user can also trigger it later via `/api/ai/analyze`.
 - Pointclouds delegate to the chunked path under the hood.
 - SHA-256 duplicate check is enforced; 409 on duplicate.
 - 5 GB default size limit (`MAX_UPLOAD_SIZE_BYTES`); 413 if exceeded.

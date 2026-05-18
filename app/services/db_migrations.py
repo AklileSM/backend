@@ -34,7 +34,7 @@ How to add a new migration
    transaction, log at INFO level.
 2. Import and call it in app/main.py's lifespan() after the existing calls.
 3. Do NOT rely on ordering relative to create_all for tables that may not exist
-   yet — guard with ``if not inspector.has_table(...): return``.
+   yet, guard with ``if not inspector.has_table(...): return``.
 """
 
 import logging
@@ -183,7 +183,7 @@ def ensure_rooms_slug_scoped_to_project(engine: Engine) -> None:
                 "ALTER TABLE rooms ADD CONSTRAINT uq_rooms_project_slug UNIQUE (project_id, slug)"
             ))
         elif dialect == "sqlite":
-            # SQLite cannot drop constraints — recreate the table with the correct definition.
+            # SQLite cannot drop constraints, recreate the table with the correct definition.
             conn.execute(text("""
                 CREATE TABLE rooms_new (
                     id VARCHAR(36) PRIMARY KEY,
@@ -292,7 +292,7 @@ def ensure_project_activity_table(engine: Engine) -> None:
 
     Append-only audit log. Indexed on (project_id, created_at desc) because
     every read is "latest N entries for project X". user_id is SET NULL on
-    user deletion — we keep the row but lose the FK link; the denormalised
+    user deletion, we keep the row but lose the FK link; the denormalised
     username column still tells you who acted.
     """
     inspector = inspect(engine)
@@ -323,7 +323,7 @@ def ensure_annotations_extensions(engine: Engine) -> None:
     """Add flag, linked_annotation_id, and attachment_bucket_name/object_name
     columns to annotations if they're missing.
 
-    Backfills nothing — these columns are nullable on purpose; existing pins
+    Backfills nothing, these columns are nullable on purpose; existing pins
     just stay uncategorised and unlinked.
     """
     inspector = inspect(engine)

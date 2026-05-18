@@ -21,7 +21,7 @@ _STALE_UPLOAD_AGE_SECONDS = 4 * 3600  # 4 hours
 def cleanup_stale_uploads() -> None:
     """Remove abandoned chunked-upload temp directories older than 4 hours.
 
-    Called once at server startup. Safe to call multiple times — errors on
+    Called once at server startup. Safe to call multiple times, errors on
     individual directories are logged and skipped.
     """
     if not _POINTCLOUD_UPLOAD_DIR.exists():

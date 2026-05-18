@@ -2,7 +2,7 @@
 
 Single entry point `log_activity(...)` that records an audit row in the
 `project_activity` table. Designed so a logging failure can never break
-the request that triggered it — every call is wrapped in try/except and
+the request that triggered it, every call is wrapped in try/except and
 swallowed at warning level. Activity logs are nice-to-have, not the
 source of truth.
 """
@@ -30,7 +30,7 @@ def log_activity(
     """Best-effort write into project_activity.
 
     project_id can be None for events that don't have a project context
-    (in which case we just skip — there's nowhere to file them). Same for
+    (in which case we just skip, there's nowhere to file them). Same for
     actor when we have no authenticated user.
 
     The caller does NOT need to commit; we commit ourselves so the log is

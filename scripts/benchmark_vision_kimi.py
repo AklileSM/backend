@@ -1,5 +1,5 @@
 """
-Vision model benchmark — hits Ollama directly, bypasses backend cache.
+Vision model benchmark, hits Ollama directly, bypasses backend cache.
 
 What it measures
 ----------------
@@ -63,14 +63,14 @@ from app.config import get_settings  # noqa: E402
 # ── constants ────────────────────────────────────────────────────────────────
 PROMPT = (
     "You are a construction site inspector. This is a 360-degree panoramic image captured with a wide-angle lens. "
-    "All walls, floors, and ceilings in this building are straight and flat — any curvature you see is purely lens distortion from the panoramic projection, not actual curved architecture. "
+    "All walls, floors, and ceilings in this building are straight and flat, any curvature you see is purely lens distortion from the panoramic projection, not actual curved architecture. "
     "Never describe walls or surfaces as curved. Treat all surfaces as straight.\n\n"
     "Do not show your reasoning or thinking process. Output only the final report.\n\n"
     "Look at this image and write a detailed report with three sections:\n\n"
-    "SCENE: Describe what you see — the space, construction stage, ongoing work, visible materials, equipment, workers, and overall condition.\n\n"
+    "SCENE: Describe what you see, the space, construction stage, ongoing work, visible materials, equipment, workers, and overall condition.\n\n"
     "QUALITY ISSUES: Describe visible workmanship concerns only. "
     "For each issue, state what is wrong and where it is visible in the image. "
-    "Only report what can be directly observed — do not infer consequences that cannot be confirmed from the image.\n\n"
+    "Only report what can be directly observed, do not infer consequences that cannot be confirmed from the image.\n\n"
     "SAFETY ISSUES: Describe visible safety hazards only. "
     "For each hazard, state the hazard type (fall, trip, electrical, or PPE), its location, and who is at risk. "
     "Only report hazards that are clearly visible in the image.\n\n"
@@ -266,7 +266,7 @@ def main() -> None:
         action="store_true",
         help=(
             "Auto-discover all *.jpg images under <image-dir>/panoramas/ "
-            "instead of using --eval-set. No reference descriptions — "
+            "instead of using --eval-set. No reference descriptions, "
             "only structure, consistency, and latency are measured."
         ),
     )

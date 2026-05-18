@@ -19,7 +19,7 @@ router = APIRouter()
 settings = get_settings()
 
 # Flag taxonomy is shared with reports (frontend lib/observationReportFlags.ts).
-# Empty / null is allowed too — annotations without a category just render in
+# Empty / null is allowed too, annotations without a category just render in
 # the neutral pin color.
 _ALLOWED_FLAGS = frozenset({"safety", "quality", "delayed"})
 # Accept the common browser-renderable image types. Anything else is rejected
@@ -196,8 +196,8 @@ async def upload_annotation_attachment(
 ) -> AnnotationResponse:
     """Attach (or replace) an image on an annotation.
 
-    Stored in the dedicated annotation_attachments bucket — not in the regular
-    media bucket — so it doesn't clutter the room/date file grid.
+    Stored in the dedicated annotation_attachments bucket, not in the regular
+    media bucket, so it doesn't clutter the room/date file grid.
     """
     annotation = db.scalar(select(Annotation).where(Annotation.id == annotation_id))
     if annotation is None:

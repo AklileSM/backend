@@ -1,5 +1,5 @@
 """
-Vision model benchmark — hits Ollama directly, bypasses backend cache.
+Vision model benchmark, hits Ollama directly, bypasses backend cache.
 
 What it measures
 ----------------
@@ -53,9 +53,9 @@ from app.config import get_settings  # noqa: E402
 
 # ── constants ────────────────────────────────────────────────────────────────
 PROMPT = (
-    "You are a construction site inspector. This is a 360-degree panoramic image captured with a wide-angle lens. All walls, floors, and ceilings in this building are straight and flat — any curvature you see is purely lens distortion from the panoramic projection, not actual curved architecture. Never describe walls or surfaces as curved. Treat all surfaces as straight.\n\n"
+    "You are a construction site inspector. This is a 360-degree panoramic image captured with a wide-angle lens. All walls, floors, and ceilings in this building are straight and flat, any curvature you see is purely lens distortion from the panoramic projection, not actual curved architecture. Never describe walls or surfaces as curved. Treat all surfaces as straight.\n\n"
     "Look at this image and write a detailed report with three sections:\n\n"
-    "SCENE: Describe what you see — the space, ongoing work, materials, workers, and overall condition.\n\n"
+    "SCENE: Describe what you see, the space, ongoing work, materials, workers, and overall condition.\n\n"
     "QUALITY ISSUES: Describe any quality or workmanship concerns in detail. Explain what is wrong and where.\n\n"
     "SAFETY ISSUES: Describe any safety concerns in detail. Explain the hazard and its location or cause.\n\n"
     "Write at upto 3 sentences per section. Do not repeat points across sections."
@@ -223,7 +223,7 @@ def main() -> None:
         action="store_true",
         help=(
             "Auto-discover all *.jpg images under <image-dir>/panoramas/ "
-            "instead of using --eval-set. No reference descriptions — "
+            "instead of using --eval-set. No reference descriptions, "
             "only structure, consistency, and latency are measured."
         ),
     )
