@@ -52,11 +52,11 @@ def send_verification_email(to: str, token: str) -> None:
     verify_url = f"{settings.frontend_url}/verify-email?token={token}"
     html = f"""
 <p>Hi,</p>
-<p>Click the link below to verify your email address for A6 Stern:</p>
+<p>Click the link below to verify your email address for SiteScope:</p>
 <p><a href="{verify_url}">{verify_url}</a></p>
 <p>This link expires in 7 days. If you did not create an account, you can ignore this email.</p>
 """
-    send_email(to, "Verify your email address, A6 Stern", html)
+    send_email(to, "Verify your email address, SiteScope", html)
 
 
 def send_password_reset_email(to: str, token: str) -> None:
@@ -64,8 +64,8 @@ def send_password_reset_email(to: str, token: str) -> None:
     reset_url = f"{settings.frontend_url}/reset-password?token={token}"
     html = f"""
 <p>Hi,</p>
-<p>You requested a password reset for your A6 Stern account. Click the link below to set a new password:</p>
+<p>You requested a password reset for your SiteScope account. Click the link below to set a new password:</p>
 <p><a href="{reset_url}">{reset_url}</a></p>
 <p>This link expires in 1 hour. If you did not request a reset, you can safely ignore this email.</p>
 """
-    send_email(to, "Reset your password, A6 Stern", html)
+    send_email(to, "Reset your password, SiteScope", html)
