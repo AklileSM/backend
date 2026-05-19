@@ -59,6 +59,47 @@ def send_verification_email(to: str, token: str) -> None:
     send_email(to, "Verify your email address, SiteScope", html)
 
 
+def send_feedback_email(
+    *,
+    to: str,
+    comment: str,
+    submitted_by: str,
+    submitted_at: str,
+    page_url: str,
+    viewport: str,
+    user_agent: str,
+    screenshot_urls: list[str],
+) -> None:
+    """Email a single feedback submission to the project owner."""
+    screenshot_html = ""
+    if screenshot_urls:
+        items = "".join(
+            f'<li><a href="{url}">Screenshot {i + 1}</a></li>'
+            for i, url in enumerate(screenshot_urls)
+        )
+        screenshot_html = f"<p><strong>Screenshots ({len(screenshot_urls)}):</strong></p><ul>{items}</ul>"
+
+    comment_html = (
+        f'<p style="white-space: pre-wrap; padding: 12px; background: #f5f5f5; border-left: 3px solid #f59e0b;">{comment}</p>'
+        if comment.strip()
+        else '<p><em>(no comment)</em></p>'
+    )
+
+    html = f"""
+<p><strong>New feedback from {submitted_by}</strong></p>
+{comment_html}
+{screenshot_html}
+<hr/>
+<p style="color: #666; font-size: 12px;">
+  <strong>Page:</strong> {page_url}<br/>
+  <strong>Submitted:</strong> {submitted_at}<br/>
+  <strong>Viewport:</strong> {viewport}<br/>
+  <strong>User agent:</strong> {user_agent}
+</p>
+"""
+    send_email(to, f"SiteScope feedback from {submitted_by}", html)
+
+
 def send_password_reset_email(to: str, token: str) -> None:
     settings = get_settings()
     reset_url = f"{settings.frontend_url}/reset-password?token={token}"

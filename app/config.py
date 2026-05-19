@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     minio_bucket_reports: str = "construction-reports"
     minio_bucket_floorplans: str = "construction-floorplans"
     minio_bucket_annotation_attachments: str = "construction-annotation-attachments"
+    minio_bucket_feedback: str = "construction-feedback"
     # Public-facing MinIO URL (e.g. https://minio.sitescope.smart-crg.com).
     # Required when the app is accessed over the internet (Cloudflare Tunnel, reverse proxy, etc.).
     # All presigned GET and PUT URLs will use this base instead of the internal minio_server address.

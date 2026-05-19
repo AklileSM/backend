@@ -34,6 +34,7 @@ class StorageService:
             settings.minio_bucket_reports,
             settings.minio_bucket_floorplans,
             settings.minio_bucket_annotation_attachments,
+            settings.minio_bucket_feedback,
         ):
             if not self.client.bucket_exists(bucket):
                 self.client.make_bucket(bucket)
