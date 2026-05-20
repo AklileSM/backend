@@ -137,8 +137,12 @@ def request_password_reset(
 ) -> None:
     email = payload.email.strip().lower()
     user = db.scalar(select(User).where(func.lower(User.email) == email))
-    if user is None or not user.is_active:
-        # Always return 204 to prevent account enumeration.
+    if user is None or not user.is_active or not user.email_verified:
+        # Always return 204 to prevent account enumeration, and to avoid
+        # leaking whether an unverified address is associated with an account.
+        # Password reset is gated on email_verified so that an attacker who
+        # registered an account against someone else's address cannot take
+        # it over once the real owner gains access to their mailbox.
         return
 
     token = _generate_token()

@@ -66,9 +66,9 @@ POST /api/auth/register   {username, password, email?}
 
 ```
 1. POST /api/auth/request-password-reset {email}
-   ├─ email not found OR is_active=False → 204 (silent, anti-enumeration)
-   └─ found → password_reset_token written, send_password_reset_email()
-              token TTL: 1 hour
+   ├─ email not found OR is_active=False OR email_verified=False → 204 (silent, anti-enumeration + unverified gate)
+   └─ found, active, verified → password_reset_token written, send_password_reset_email()
+                                token TTL: 1 hour
 2. User clicks link in email
 3. Frontend extracts ?token=… and calls:
    GET  /api/auth/validate-reset-token?token=…   (UX-only preflight)
@@ -81,6 +81,8 @@ POST /api/auth/register   {username, password, email?}
 ```
 
 Tokens are random 256-bit values (`secrets.token_urlsafe(32)`). They are single-use, successful reset clears the row's `password_reset_token`.
+
+The `email_verified=False` gate exists so that an attacker who registered an account against someone else's address cannot later be taken over by the real owner of that mailbox issuing a password reset. Once a user verifies their email they can reset normally; before that, the only path back into an account with a forgotten password is an admin intervention.
 
 ## Account enumeration prevention
 
