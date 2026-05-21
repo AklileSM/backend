@@ -1,6 +1,6 @@
 # A6-Stern Backend
 
-> **New here?** Read [`deployment/PROJECT_OVERVIEW.md`](../deployment/PROJECT_OVERVIEW.md) first, it's the cross-repo front page with a topic-based map of every doc in the project.
+> **New here?** Read [`../README.md`](../README.md) first, it's the project front page with a topic-based map of every doc in the repo.
 
 FastAPI backend for the A6-Stern construction documentation platform. Handles authentication, file storage (via MinIO), point cloud conversion (via PotreeConverter), AI image analysis, and report generation.
 

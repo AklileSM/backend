@@ -118,6 +118,7 @@ def list_projects(
     return [_project_to_response(p) for p in projects]
 
 
+@router.post("", response_model=ProjectResponse, status_code=201)
 @router.post("/", response_model=ProjectResponse, status_code=201)
 def create_project(
     payload: ProjectCreateRequest,
