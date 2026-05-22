@@ -1,10 +1,11 @@
 from datetime import datetime
 
 import mimetypes
+import re
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -32,6 +33,45 @@ settings = get_settings()
 
 _ALLOWED_FLOORPLAN_TYPES = {"image/jpeg", "image/png", "image/webp"}
 _FLOORPLAN_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+
+_SLUG_MAX_LEN = 100
+_SLUG_SUFFIX_LIMIT = 1000
+
+
+def _slugify(name: str) -> str:
+    """Lowercase, hyphenate, strip non-[a-z0-9-] — matches frontend autoSlug."""
+    s = re.sub(r"[^a-z0-9]+", "-", name.lower().strip())
+    return s.strip("-")[:_SLUG_MAX_LEN]
+
+
+def _unique_project_slug(db: Session, base: str) -> str:
+    """Return base, or base-2, base-3... until globally free in projects.slug."""
+    if not base:
+        base = "project"
+    candidate = base
+    for n in range(2, _SLUG_SUFFIX_LIMIT + 1):
+        exists = db.scalar(select(Project.id).where(Project.slug == candidate))
+        if exists is None:
+            return candidate
+        suffix = f"-{n}"
+        candidate = f"{base[: _SLUG_MAX_LEN - len(suffix)]}{suffix}"
+    raise HTTPException(status_code=400, detail="Could not allocate a unique slug")
+
+
+def _unique_room_slug(db: Session, project_id: str, base: str) -> str:
+    """Return base, or base-2... until free within a single project."""
+    if not base:
+        base = "room"
+    candidate = base
+    for n in range(2, _SLUG_SUFFIX_LIMIT + 1):
+        exists = db.scalar(
+            select(Room.id).where(Room.project_id == project_id, Room.slug == candidate)
+        )
+        if exists is None:
+            return candidate
+        suffix = f"-{n}"
+        candidate = f"{base[: _SLUG_MAX_LEN - len(suffix)]}{suffix}"
+    raise HTTPException(status_code=400, detail="Could not allocate a unique room slug")
 
 
 def _project_to_response(p: Project) -> ProjectResponse:
@@ -125,9 +165,25 @@ def create_project(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ProjectResponse:
+    name = payload.name.strip()
+
+    name_taken = db.scalar(
+        select(Project.id).where(
+            Project.owner_id == current_user.id,
+            func.lower(Project.name) == name.lower(),
+        )
+    )
+    if name_taken is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"You already have a project named '{name}'",
+        )
+
+    slug = _unique_project_slug(db, _slugify(name))
+
     project = Project(
-        name=payload.name.strip(),
-        slug=payload.slug.strip(),
+        name=name,
+        slug=slug,
         description=payload.description,
         location=payload.location,
         owner_id=current_user.id,
@@ -139,7 +195,7 @@ def create_project(
         db.flush()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=400, detail="A project with that slug already exists") from None
+        raise HTTPException(status_code=400, detail="Project name conflicts with an existing one") from None
 
     db.add(ProjectMember(project_id=project.id, user_id=current_user.id, role="owner"))
     db.commit()
@@ -192,7 +248,21 @@ def update_project(
         raise HTTPException(status_code=403, detail="Only project owners can update the project")
 
     if payload.name is not None:
-        project.name = payload.name.strip()
+        new_name = payload.name.strip()
+        if new_name.lower() != project.name.lower():
+            clash = db.scalar(
+                select(Project.id).where(
+                    Project.owner_id == project.owner_id,
+                    func.lower(Project.name) == new_name.lower(),
+                    Project.id != project.id,
+                )
+            )
+            if clash is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"You already have a project named '{new_name}'",
+                )
+        project.name = new_name
     if payload.description is not None:
         project.description = payload.description
     if payload.location is not None:
@@ -344,10 +414,25 @@ def create_room(
     if member is not None and member.role not in ("owner", "editor"):
         raise HTTPException(status_code=403, detail="Only owners and editors can create rooms")
 
+    name = payload.name.strip()
+    name_taken = db.scalar(
+        select(Room.id).where(
+            Room.project_id == project_id,
+            func.lower(Room.name) == name.lower(),
+        )
+    )
+    if name_taken is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A room named '{name}' already exists in this project",
+        )
+
+    slug = _unique_room_slug(db, project_id, _slugify(name))
+
     room = Room(
         project_id=project_id,
-        name=payload.name.strip(),
-        slug=payload.slug.strip(),
+        name=name,
+        slug=slug,
         sort_order=payload.sort_order,
     )
     db.add(room)
@@ -355,7 +440,7 @@ def create_room(
         db.flush()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=400, detail="A room with that slug already exists") from None
+        raise HTTPException(status_code=400, detail="Room name conflicts with an existing one") from None
     db.commit()
     db.refresh(room)
     return _room_to_response(room)
@@ -381,7 +466,21 @@ def update_room(
         raise HTTPException(status_code=404, detail="Room not found")
 
     if payload.name is not None:
-        room.name = payload.name.strip()
+        new_name = payload.name.strip()
+        if new_name.lower() != room.name.lower():
+            clash = db.scalar(
+                select(Room.id).where(
+                    Room.project_id == project_id,
+                    func.lower(Room.name) == new_name.lower(),
+                    Room.id != room.id,
+                )
+            )
+            if clash is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"A room named '{new_name}' already exists in this project",
+                )
+        room.name = new_name
     if payload.slug is not None:
         room.slug = payload.slug.strip()
     if payload.floor_plan_coordinates is not None:

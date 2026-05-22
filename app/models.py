@@ -52,6 +52,9 @@ class Project(Base):
     """
 
     __tablename__ = "projects"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "name", name="uq_projects_owner_name"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -117,7 +120,10 @@ class Room(Base):
     """
 
     __tablename__ = "rooms"
-    __table_args__ = (UniqueConstraint("project_id", "slug", name="uq_rooms_project_slug"),)
+    __table_args__ = (
+        UniqueConstraint("project_id", "slug", name="uq_rooms_project_slug"),
+        UniqueConstraint("project_id", "name", name="uq_rooms_project_name"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False)

@@ -16,8 +16,10 @@ from app.services.db_migrations import (
     ensure_project_floorplan_url,
     ensure_project_members_table,
     ensure_projects_fields,
+    ensure_projects_owner_name_unique,
     ensure_reports_label,
     ensure_rooms_fields,
+    ensure_rooms_project_name_unique,
     ensure_rooms_slug_scoped_to_project,
     ensure_annotations_extensions,
     ensure_project_activity_table,
@@ -57,6 +59,8 @@ async def lifespan(_: FastAPI):
     ensure_project_floorplan_url(engine)
     ensure_rooms_fields(engine)
     ensure_rooms_slug_scoped_to_project(engine)
+    ensure_projects_owner_name_unique(engine)
+    ensure_rooms_project_name_unique(engine)
     ensure_users_email_fields(engine)
     ensure_reports_label(engine)
     ensure_annotations_extensions(engine)

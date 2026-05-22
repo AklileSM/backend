@@ -207,6 +207,85 @@ def ensure_rooms_slug_scoped_to_project(engine: Engine) -> None:
     logger.info("Updated rooms slug uniqueness constraint to be scoped per project")
 
 
+def ensure_projects_owner_name_unique(engine: Engine) -> None:
+    """Add UNIQUE(owner_id, name) to projects so one user cannot have two
+    projects with the same name. Different users may still share a name.
+
+    If pre-existing data already violates the rule we skip the constraint
+    rather than crash the app, the application-level check in
+    create_project still blocks new collisions.
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("projects"):
+        return
+    unique_constraints = inspector.get_unique_constraints("projects")
+    if any(set(c["column_names"]) == {"owner_id", "name"} for c in unique_constraints):
+        return
+
+    with engine.begin() as conn:
+        dupes = conn.execute(text(
+            "SELECT owner_id, name, COUNT(*) AS n FROM projects "
+            "WHERE owner_id IS NOT NULL "
+            "GROUP BY owner_id, name HAVING COUNT(*) > 1"
+        )).all()
+        if dupes:
+            logger.warning(
+                "Skipping uq_projects_owner_name: %d duplicate (owner, name) pairs already exist. "
+                "App-level checks still block new collisions.", len(dupes),
+            )
+            return
+
+        dialect = engine.dialect.name
+        if dialect == "sqlite":
+            conn.execute(text(
+                "CREATE UNIQUE INDEX uq_projects_owner_name ON projects (owner_id, name)"
+            ))
+        else:
+            conn.execute(text(
+                "ALTER TABLE projects ADD CONSTRAINT uq_projects_owner_name "
+                "UNIQUE (owner_id, name)"
+            ))
+    logger.info("Added uq_projects_owner_name constraint")
+
+
+def ensure_rooms_project_name_unique(engine: Engine) -> None:
+    """Add UNIQUE(project_id, name) to rooms so one project cannot have two
+    rooms with the same name. Different projects may still share a room name.
+
+    Skips silently if existing data already violates the rule.
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("rooms"):
+        return
+    unique_constraints = inspector.get_unique_constraints("rooms")
+    if any(set(c["column_names"]) == {"project_id", "name"} for c in unique_constraints):
+        return
+
+    with engine.begin() as conn:
+        dupes = conn.execute(text(
+            "SELECT project_id, name, COUNT(*) AS n FROM rooms "
+            "GROUP BY project_id, name HAVING COUNT(*) > 1"
+        )).all()
+        if dupes:
+            logger.warning(
+                "Skipping uq_rooms_project_name: %d duplicate (project, name) pairs already exist. "
+                "App-level checks still block new collisions.", len(dupes),
+            )
+            return
+
+        dialect = engine.dialect.name
+        if dialect == "sqlite":
+            conn.execute(text(
+                "CREATE UNIQUE INDEX uq_rooms_project_name ON rooms (project_id, name)"
+            ))
+        else:
+            conn.execute(text(
+                "ALTER TABLE rooms ADD CONSTRAINT uq_rooms_project_name "
+                "UNIQUE (project_id, name)"
+            ))
+    logger.info("Added uq_rooms_project_name constraint")
+
+
 def ensure_users_role_dropped(engine: Engine) -> None:
     """Drop the legacy users.role column now that is_admin boolean is in use."""
     inspector = inspect(engine)
