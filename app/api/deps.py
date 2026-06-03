@@ -45,6 +45,17 @@ def require_user_can_upload(current_user: User = Depends(get_current_user)) -> U
     return current_user
 
 
+def require_robot(current_user: User = Depends(get_current_user)) -> User:
+    """Gate for robot-only endpoints (e.g. POST /api/upload/robot).
+
+    Service accounts have no email address, so the email_verified check that
+    applies to human uploads is intentionally not enforced here.
+    """
+    if not current_user.is_robot:
+        raise HTTPException(status_code=403, detail="Robot service account required")
+    return current_user
+
+
 def get_project_member(
     project_id: str,
     current_user: User = Depends(get_current_user),

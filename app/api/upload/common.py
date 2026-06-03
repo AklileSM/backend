@@ -70,12 +70,29 @@ def _require_can_upload(user: User, room: Room, db: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _log_upload_activity(db: Session, *, room: Room, asset: FileAsset, current_user: User) -> None:
+def _log_upload_activity(
+    db: Session,
+    *,
+    room: Room,
+    asset: FileAsset,
+    current_user: User,
+    source: str | None = None,
+) -> None:
     """Record an `upload.<media_type>` row on the project activity feed.
 
     Centralised here so every upload path (small, chunked, direct-MinIO,
-    point-cloud) records the same shape of metadata.
+    point-cloud) records the same shape of metadata. ``source`` tags the
+    origin of the upload (e.g. "robot") so automated captures are
+    distinguishable from human uploads in the feed; omitted for human uploads.
     """
+    metadata = {
+        "file_name": asset.display_name,
+        "room_name": room.name,
+        "room_slug": room.slug,
+        "capture_date": asset.capture_date.isoformat(),
+    }
+    if source:
+        metadata["source"] = source
     log_activity(
         db,
         project_id=room.project_id,
@@ -83,12 +100,7 @@ def _log_upload_activity(db: Session, *, room: Room, asset: FileAsset, current_u
         action=f"upload.{asset.media_type}",
         target_type="file_asset",
         target_id=asset.id,
-        metadata={
-            "file_name": asset.display_name,
-            "room_name": room.name,
-            "room_slug": room.slug,
-            "capture_date": asset.capture_date.isoformat(),
-        },
+        metadata=metadata,
     )
 
 

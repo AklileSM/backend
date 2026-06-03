@@ -1,14 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
+from app.core.security import hash_password
 from app.database import get_db
 from app.models import Project, User
 from app.schemas import (
     AdminUserResponse,
     AdminUserUpdateRequest,
     ProjectResponse,
+    RobotAccountCreateRequest,
 )
 
 router = APIRouter()
@@ -21,6 +24,7 @@ def _user_to_admin_response(u: User) -> AdminUserResponse:
         email=u.email,
         is_admin=u.is_admin,
         is_active=u.is_active,
+        is_robot=u.is_robot,
         created_at=u.created_at,
     )
 
@@ -46,6 +50,38 @@ def list_users(
 ) -> list[AdminUserResponse]:
     users = db.scalars(select(User).order_by(User.created_at.asc())).all()
     return [_user_to_admin_response(u) for u in users]
+
+
+@router.post("/robot-accounts", response_model=AdminUserResponse, status_code=201)
+def create_robot_account(
+    payload: RobotAccountCreateRequest,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> AdminUserResponse:
+    """Create a service account for an autonomous agent (e.g. the Go2W).
+
+    The account is created with is_robot=True and pre-verified (robots have no
+    email). It is NOT an admin; grant it project access by adding it as an
+    owner/editor member of the relevant project(s). It authenticates via the
+    normal POST /api/auth/login flow and receives a standard JWT.
+    """
+    robot = User(
+        username=payload.username.strip(),
+        email=None,
+        password_hash=hash_password(payload.password),
+        is_admin=False,
+        is_active=True,
+        is_robot=True,
+        email_verified=True,
+    )
+    db.add(robot)
+    try:
+        db.commit()
+        db.refresh(robot)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Username already taken") from None
+    return _user_to_admin_response(robot)
 
 
 @router.get("/user-search", response_model=list[AdminUserResponse])

@@ -21,6 +21,7 @@ The fallback path when the direct/presigned PUT route is unavailable.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import tempfile
@@ -65,6 +66,7 @@ def init_pointcloud_upload(
     filename: str = Form(...),
     file_size: int = Form(...),
     content_type: str = Form("application/octet-stream"),
+    robot_meta: str | None = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str | int]:
@@ -77,24 +79,35 @@ def init_pointcloud_upload(
     if file_size > settings.max_upload_size_bytes:
         raise HTTPException(status_code=413, detail="File too large")
 
+    # Robot uploads carry structured mission metadata (pose / mission id /
+    # sensor). We validate + re-serialise it compactly so it survives as a
+    # single line in the line-based manifest (json.dumps emits no newlines).
+    robot_meta_line: str | None = None
+    if robot_meta:
+        try:
+            parsed = json.loads(robot_meta)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="robot_meta must be valid JSON") from None
+        if not isinstance(parsed, dict):
+            raise HTTPException(status_code=400, detail="robot_meta must be a JSON object")
+        robot_meta_line = json.dumps(parsed, separators=(",", ":"))
+
     upload_id = uuid.uuid4().hex
     upload_dir = _pointcloud_upload_path(upload_id)
     upload_dir.mkdir(parents=True, exist_ok=False)
     safe_name = _safe_filename(filename)
     manifest = upload_dir / "manifest.txt"
-    manifest.write_text(
-        "\n".join(
-            [
-                f"room_id={room_id}",
-                f"capture_date={capture_date.isoformat()}",
-                f"filename={safe_name}",
-                f"file_size={file_size}",
-                f"content_type={content_type or 'application/octet-stream'}",
-                f"display_name={_generate_display_name(room=room, capture_date=capture_date, media_type='pointcloud', content_type=content_type or 'application/octet-stream', original_filename=safe_name, db=db)}",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    lines = [
+        f"room_id={room_id}",
+        f"capture_date={capture_date.isoformat()}",
+        f"filename={safe_name}",
+        f"file_size={file_size}",
+        f"content_type={content_type or 'application/octet-stream'}",
+        f"display_name={_generate_display_name(room=room, capture_date=capture_date, media_type='pointcloud', content_type=content_type or 'application/octet-stream', original_filename=safe_name, db=db)}",
+    ]
+    if robot_meta_line is not None:
+        lines.append(f"robot_meta={robot_meta_line}")
+    manifest.write_text("\n".join(lines), encoding="utf-8")
     return {"upload_id": upload_id, "chunk_size": _POINTCLOUD_CHUNK}
 
 
@@ -173,6 +186,23 @@ def complete_pointcloud_upload(
     bucket_name = _bucket_for_media_type("pointcloud")
     extension = os.path.splitext(original_filename)[1]
 
+    # A manifest robot_meta line marks this as a robot upload: attach the
+    # mission provenance and tag the activity feed so it's distinguishable from
+    # a human upload (parity with POST /upload/robot for small files).
+    metadata_json = {
+        "uploaded_by_user_id": current_user.id,
+        "uploaded_by_username": current_user.username,
+        "conversion_status": "uploading",
+    }
+    activity_source: str | None = None
+    robot_meta_raw = meta.get("robot_meta")
+    if robot_meta_raw:
+        try:
+            metadata_json["robot"] = json.loads(robot_meta_raw)
+            activity_source = "robot"
+        except json.JSONDecodeError:
+            logger.warning("Ignoring malformed robot_meta in manifest for upload %s", upload_id)
+
     asset = FileAsset(
         room_id=room.id,
         media_type="pointcloud",
@@ -184,11 +214,7 @@ def complete_pointcloud_upload(
         content_type=content_type,
         file_size=None,
         sha256_hash=None,
-        metadata_json={
-            "uploaded_by_user_id": current_user.id,
-            "uploaded_by_username": current_user.username,
-            "conversion_status": "uploading",
-        },
+        metadata_json=metadata_json,
     )
     db.add(asset)
     db.commit()
@@ -208,7 +234,7 @@ def complete_pointcloud_upload(
         daemon=True,
     ).start()
 
-    _log_upload_activity(db, room=room, asset=asset, current_user=current_user)
+    _log_upload_activity(db, room=room, asset=asset, current_user=current_user, source=activity_source)
 
     return UploadResponse(
         id=asset.id,

@@ -109,6 +109,7 @@ class AdminUserResponse(BaseModel):
     email: str | None
     is_admin: bool
     is_active: bool
+    is_robot: bool = False
     created_at: datetime
 
 
@@ -116,6 +117,18 @@ class AdminUserUpdateRequest(BaseModel):
     is_admin: bool | None = None
     is_active: bool | None = None
     email: str | None = None
+
+
+class RobotAccountCreateRequest(BaseModel):
+    """Create a service account for an autonomous agent (e.g. the Go2W).
+
+    Robots have no email, so the account is created pre-verified and password
+    is the only credential. Project access is granted separately by adding the
+    account as an owner/editor member of a project.
+    """
+
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9._-]+$")
+    password: str = Field(min_length=8, max_length=128)
 
 
 class RoomResponse(BaseModel):

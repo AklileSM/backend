@@ -26,6 +26,7 @@ from app.services.db_migrations import (
     ensure_search_trigram_indexes,
     ensure_users_email_fields,
     ensure_users_is_admin,
+    ensure_users_is_robot,
     ensure_users_role_dropped,
 )
 from app.services.pointcloud import init_converter_pool, reset_interrupted_conversions, shutdown_converter_pool
@@ -62,6 +63,7 @@ async def lifespan(_: FastAPI):
     ensure_projects_owner_name_unique(engine)
     ensure_rooms_project_name_unique(engine)
     ensure_users_email_fields(engine)
+    ensure_users_is_robot(engine)
     ensure_reports_label(engine)
     ensure_annotations_extensions(engine)
     ensure_project_activity_table(engine)

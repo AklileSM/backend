@@ -32,6 +32,7 @@ from . import (
     pointcloud_direct,
     precheck,
     single,
+    robot,
 )
 from .cleanup import cleanup_stale_uploads
 
@@ -40,5 +41,6 @@ router.include_router(precheck.router)
 router.include_router(single.router)
 router.include_router(pointcloud_chunked.router)
 router.include_router(pointcloud_direct.router)
+router.include_router(robot.router)
 
 __all__ = ["router", "cleanup_stale_uploads"]

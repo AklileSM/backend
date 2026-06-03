@@ -25,6 +25,10 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Service accounts for autonomous agents (e.g. the Go2W robot). Robots have
+    # no email, so the email_verified upload gate is relaxed for them; see
+    # app/api/deps.py::require_user_can_upload and api/upload/robot.py.
+    is_robot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     email_verification_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     email_verification_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

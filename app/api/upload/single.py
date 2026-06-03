@@ -66,6 +66,37 @@ async def upload_single(
         raise HTTPException(status_code=404, detail="Room not found")
     _require_can_upload(current_user, room, db)
 
+    return await _store_upload(
+        file=file,
+        room=room,
+        media_type=media_type,
+        capture_date=capture_date,
+        background_tasks=background_tasks,
+        current_user=current_user,
+        db=db,
+    )
+
+
+async def _store_upload(
+    *,
+    file: UploadFile,
+    room: Room,
+    media_type: str,
+    capture_date: date,
+    background_tasks: BackgroundTasks,
+    current_user: User,
+    db: Session,
+    extra_metadata: dict | None = None,
+    activity_source: str | None = None,
+) -> UploadResponse:
+    """Stream a file to MinIO and record the FileAsset.
+
+    Shared by the human ``/single`` route and the robot ``/robot`` route.
+    ``extra_metadata`` is merged into ``file_assets.metadata_json`` (used by the
+    robot path to attach pose / mission provenance) and ``activity_source`` tags
+    the activity-feed entry (e.g. "robot"). Callers must validate ``media_type``
+    and resolve + permission-check ``room`` before calling.
+    """
     if media_type == "pdf":
         fn = (file.filename or "").lower()
         ct = (file.content_type or "").lower()
@@ -104,6 +135,8 @@ async def upload_single(
             extension=extension,
             current_user=current_user,
             db=db,
+            extra_metadata=extra_metadata,
+            activity_source=activity_source,
         )
 
     # --- All other types: stream to a temp file to avoid loading large files into RAM ---
@@ -151,6 +184,13 @@ async def upload_single(
                 content_type="image/jpeg",
             )
 
+        metadata_json = {
+            "uploaded_by_user_id": current_user.id,
+            "uploaded_by_username": current_user.username,
+        }
+        if extra_metadata:
+            metadata_json.update(extra_metadata)
+
         asset = FileAsset(
             room_id=room.id,
             media_type=media_type,
@@ -164,10 +204,7 @@ async def upload_single(
             content_type=content_type,
             file_size=file_size,
             sha256_hash=sha256_hash,
-            metadata_json={
-                "uploaded_by_user_id": current_user.id,
-                "uploaded_by_username": current_user.username,
-            },
+            metadata_json=metadata_json,
             ai_description_status="generating" if media_type == "image" else None,
         )
         db.add(asset)
@@ -177,7 +214,9 @@ async def upload_single(
         if media_type == "image":
             background_tasks.add_task(generate_and_cache_ai_description, asset.id)
 
-        _log_upload_activity(db, room=room, asset=asset, current_user=current_user)
+        _log_upload_activity(
+            db, room=room, asset=asset, current_user=current_user, source=activity_source
+        )
 
         return UploadResponse(
             id=asset.id,
@@ -208,6 +247,8 @@ async def _upload_pointcloud(
     extension: str,
     current_user: User,
     db: Session,
+    extra_metadata: dict | None = None,
+    activity_source: str | None = None,
 ) -> UploadResponse:
     """Stream a LAZ/point-cloud file to a temp file, upload to MinIO, then
     submit conversion to the process pool."""
@@ -243,6 +284,14 @@ async def _upload_pointcloud(
         os.unlink(tmp_path)
         raise
 
+    metadata_json = {
+        "uploaded_by_user_id": current_user.id,
+        "uploaded_by_username": current_user.username,
+        "conversion_status": "pending",
+    }
+    if extra_metadata:
+        metadata_json.update(extra_metadata)
+
     asset = FileAsset(
         room_id=room.id,
         media_type="pointcloud",
@@ -254,11 +303,7 @@ async def _upload_pointcloud(
         content_type=content_type,
         file_size=file_size,
         sha256_hash=sha256_hash,
-        metadata_json={
-            "uploaded_by_user_id": current_user.id,
-            "uploaded_by_username": current_user.username,
-            "conversion_status": "pending",
-        },
+        metadata_json=metadata_json,
     )
     db.add(asset)
     db.commit()
@@ -268,7 +313,9 @@ async def _upload_pointcloud(
     # the web server. Temp file is cleaned up by convert_pointcloud_background.
     submit_conversion(asset.id, tmp_path)
 
-    _log_upload_activity(db, room=room, asset=asset, current_user=current_user)
+    _log_upload_activity(
+        db, room=room, asset=asset, current_user=current_user, source=activity_source
+    )
 
     return UploadResponse(
         id=asset.id,

@@ -323,6 +323,23 @@ def ensure_users_email_fields(engine: Engine) -> None:
             logger.info("Added users.password_reset_token_expires_at column")
 
 
+def ensure_users_is_robot(engine: Engine) -> None:
+    """Add the is_robot flag to users if missing.
+
+    Marks service accounts (e.g. the Go2W robot) so the email_verified upload
+    gate can be relaxed for them, they have no email address to verify.
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("users"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("users")}
+    if "is_robot" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN is_robot BOOLEAN NOT NULL DEFAULT FALSE"))
+    logger.info("Added users.is_robot column")
+
+
 def ensure_reports_label(engine: Engine) -> None:
     """Add label column to reports if missing."""
     inspector = inspect(engine)
