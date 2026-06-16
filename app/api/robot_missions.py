@@ -314,9 +314,73 @@ def cancel_robot_mission(
         if step.status in ("pending", "queued", "dispatched", "running", "navigating", "capturing", "uploading"):
             step.status = "cancelled"
             step.completed_at = mission.cancelled_at
+
+    presence = db.scalar(select(RobotPresence).where(RobotPresence.robot_user_id == mission.robot_user_id))
+    if presence and presence.current_mission_id == mission.id:
+        presence.current_mission_id = None
+        presence.status = "idle"
+
     db.commit()
     db.refresh(mission)
+
+    log_activity(
+        db,
+        project_id=mission.project_id,
+        actor=current_user,
+        action="robot_mission.cancel",
+        target_type="robot_mission",
+        target_id=mission.id,
+        metadata={
+            "robot_id": mission.robot_username,
+            "capture_mode": mission.capture_mode,
+            "waypoint_count": len(mission.waypoints_json or []),
+        },
+    )
     return _mission_to_response(mission)
+
+
+@router.delete("/robot/missions/{mission_id}", status_code=204)
+def delete_robot_mission(
+    mission_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    mission = db.scalar(
+        select(RobotMission)
+        .where(RobotMission.id == mission_id)
+        .options(joinedload(RobotMission.project), selectinload(RobotMission.steps))
+    )
+    if mission is None:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    _require_project_editor(mission.project, current_user, db)
+
+    presence = db.scalar(select(RobotPresence).where(RobotPresence.robot_user_id == mission.robot_user_id))
+    if presence and presence.current_mission_id == mission.id:
+        presence.current_mission_id = None
+        if presence.status in ("running", "busy", "dispatched"):
+            presence.status = "idle"
+
+    project_id = mission.project_id
+    robot_username = mission.robot_username
+    capture_mode = mission.capture_mode
+    waypoint_count = len(mission.waypoints_json or [])
+
+    db.delete(mission)
+    db.commit()
+
+    log_activity(
+        db,
+        project_id=project_id,
+        actor=current_user,
+        action="robot_mission.delete",
+        target_type="robot_mission",
+        target_id=mission_id,
+        metadata={
+            "robot_id": robot_username,
+            "capture_mode": capture_mode,
+            "waypoint_count": waypoint_count,
+        },
+    )
 
 
 @router.post("/robots/{robot_id}/heartbeat", response_model=RobotPresenceResponse)
