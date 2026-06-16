@@ -147,6 +147,15 @@ class RobotPresenceResponse(BaseModel):
     last_seen_at: datetime
 
 
+class RobotSummaryResponse(BaseModel):
+    robot_id: str
+    username: str
+    status: str | None = None
+    current_mission_id: str | None = None
+    hostname: str | None = None
+    last_seen_at: datetime | None = None
+
+
 class RobotMissionCreateRequest(BaseModel):
     robot_id: str = Field(min_length=1, max_length=64)
     project_slug: str = Field(min_length=1, max_length=100)

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.api.deps import get_current_user, require_admin, require_robot
+from app.api.deps import get_current_user, require_robot
 from app.database import get_db
 from app.models import Project, ProjectMember, RobotMission, RobotMissionStep, RobotPresence, User
 from app.schemas import (
@@ -16,6 +16,7 @@ from app.schemas import (
     RobotMissionStatusUpdateRequest,
     RobotMissionStepResponse,
     RobotPresenceResponse,
+    RobotSummaryResponse,
 )
 from app.services.activity import log_activity
 
@@ -108,6 +109,17 @@ def _presence_to_response(presence: RobotPresence) -> RobotPresenceResponse:
     )
 
 
+def _robot_to_summary(robot: User, presence: RobotPresence | None) -> RobotSummaryResponse:
+    return RobotSummaryResponse(
+        robot_id=robot.id,
+        username=robot.username,
+        status=presence.status if presence else None,
+        current_mission_id=presence.current_mission_id if presence else None,
+        hostname=presence.hostname if presence else None,
+        last_seen_at=presence.last_seen_at if presence else None,
+    )
+
+
 def _apply_step_results(mission: RobotMission, result: dict | None) -> None:
     if not isinstance(result, dict):
         return
@@ -135,6 +147,58 @@ def _apply_step_results(mission: RobotMission, result: dict | None) -> None:
         step.result_json = item
         step.started_at = step.started_at or mission.started_at or now
         step.completed_at = now
+
+
+@router.get("/robots", response_model=list[RobotSummaryResponse])
+def list_robots(
+    _: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[RobotSummaryResponse]:
+    robots = db.scalars(
+        select(User).where(User.is_robot == True).order_by(User.username.asc())  # noqa: E712
+    ).all()
+    presences = db.scalars(select(RobotPresence)).all()
+    presence_by_user_id = {presence.robot_user_id: presence for presence in presences}
+    return [_robot_to_summary(robot, presence_by_user_id.get(robot.id)) for robot in robots]
+
+
+@router.get("/robot/missions", response_model=list[RobotMissionResponse])
+def list_robot_missions(
+    robot_id: str | None = Query(default=None),
+    project_slug: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[RobotMissionResponse]:
+    stmt = (
+        select(RobotMission)
+        .options(joinedload(RobotMission.project), selectinload(RobotMission.steps))
+        .order_by(RobotMission.created_at.desc())
+        .limit(limit)
+    )
+
+    if robot_id:
+        robot = _resolve_robot_user(robot_id, db)
+        stmt = stmt.where(RobotMission.robot_user_id == robot.id)
+    if project_slug:
+        project = db.scalar(select(Project).where(Project.slug == project_slug))
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        stmt = stmt.where(RobotMission.project_id == project.id)
+    if status:
+        stmt = stmt.where(RobotMission.status == status)
+
+    if not current_user.is_admin:
+        if current_user.is_robot:
+            stmt = stmt.where(RobotMission.robot_user_id == current_user.id)
+        else:
+            stmt = stmt.join(Project, RobotMission.project_id == Project.id).join(
+                ProjectMember, ProjectMember.project_id == Project.id
+            ).where(ProjectMember.user_id == current_user.id)
+
+    missions = db.scalars(stmt).unique().all()
+    return [_mission_to_response(mission) for mission in missions]
 
 
 @router.post("/robot/missions", response_model=RobotMissionResponse, status_code=201)
