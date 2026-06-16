@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api import admin, ai, annotations, auth, feedback, files, media, projects, reports, rooms, upload
+from app.api import admin, ai, annotations, auth, feedback, files, media, projects, reports, robot_missions, rooms, upload
 from app.api.upload import cleanup_stale_uploads
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine
@@ -118,6 +118,7 @@ app.include_router(projects.router, prefix="/api/projects", tags=["Projects"])
 app.include_router(rooms.router, prefix="/api/rooms", tags=["Rooms"])
 app.include_router(files.router, prefix="/api/files", tags=["Files"])
 app.include_router(upload.router, prefix="/api/upload", tags=["Upload"])
+app.include_router(robot_missions.router, prefix="/api", tags=["Robot Missions"])
 app.include_router(ai.router, prefix="/api/ai", tags=["AI"])
 app.include_router(reports.router, prefix="/api/reports", tags=["Reports"])
 app.include_router(annotations.router, prefix="/api/annotations", tags=["Annotations"])

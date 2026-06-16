@@ -131,6 +131,76 @@ class RobotAccountCreateRequest(BaseModel):
     password: str = Field(min_length=8, max_length=128)
 
 
+class RobotHeartbeatRequest(BaseModel):
+    robot_id: str
+    status: str = Field(min_length=1, max_length=32)
+    current_mission_id: str | None = None
+    hostname: str | None = None
+    reported_at_utc: datetime | None = None
+
+
+class RobotPresenceResponse(BaseModel):
+    robot_id: str
+    status: str
+    current_mission_id: str | None = None
+    hostname: str | None = None
+    last_seen_at: datetime
+
+
+class RobotMissionCreateRequest(BaseModel):
+    robot_id: str = Field(min_length=1, max_length=64)
+    project_slug: str = Field(min_length=1, max_length=100)
+    waypoints: list[str] = Field(min_length=1)
+    room_slug_map: dict[str, str] = Field(default_factory=dict)
+    capture_mode: str = Field(default="panorama", min_length=1, max_length=32)
+    capture_date: date
+    retry_policy: dict[str, Any] = Field(default_factory=dict)
+    robot_meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class RobotMissionStepResponse(BaseModel):
+    id: str
+    sequence_index: int
+    waypoint_name: str
+    room_slug: str | None = None
+    status: str
+    error_message: str | None = None
+    navigation_goal_id: str | None = None
+    navigation_result: str | None = None
+    uploaded_file_id: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class RobotMissionResponse(BaseModel):
+    id: str
+    robot_id: str
+    project_id: str
+    project_slug: str
+    status: str
+    capture_mode: str
+    capture_date: date
+    waypoints: list[str] = Field(default_factory=list)
+    room_slug_map: dict[str, str] = Field(default_factory=dict)
+    retry_policy: dict[str, Any] = Field(default_factory=dict)
+    robot_meta: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    dispatched_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    steps: list[RobotMissionStepResponse] = Field(default_factory=list)
+    result: dict[str, Any] | None = None
+
+
+class RobotMissionStatusUpdateRequest(BaseModel):
+    status: str = Field(min_length=1, max_length=32)
+    robot_id: str | None = None
+    started_at_utc: datetime | None = None
+    completed_at_utc: datetime | None = None
+    result: dict[str, Any] | None = None
+
+
 class RoomResponse(BaseModel):
     id: str
     name: str
