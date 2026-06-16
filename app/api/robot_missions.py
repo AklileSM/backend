@@ -339,7 +339,7 @@ def cancel_robot_mission(
     return _mission_to_response(mission)
 
 
-@router.delete("/robot/missions/{mission_id}", status_code=204)
+@router.delete("/robot/missions/{mission_id}", status_code=200)
 def delete_robot_mission(
     mission_id: str,
     current_user: User = Depends(get_current_user),
