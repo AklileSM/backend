@@ -12,8 +12,8 @@ from app.config import get_settings
 from app.database import get_db
 from app.models import Project, RobotPairingToken, User
 from app.schemas import (
-    RobotPairingClaimRequest,
     RobotPairingClaimResponse,
+    RobotPairingTokenClaimRequest,
     RobotPairingTokenCreateRequest,
     RobotPairingTokenResponse,
 )
@@ -111,7 +111,7 @@ def revoke_robot_pairing(
 
 @router.post("/robot-pairings/claim", response_model=RobotPairingClaimResponse)
 def claim_robot_pairing(
-    payload: RobotPairingClaimRequest,
+    payload: RobotPairingTokenClaimRequest,
     db: Session = Depends(get_db),
 ) -> RobotPairingClaimResponse:
     pairing = db.scalar(select(RobotPairingToken).where(RobotPairingToken.token == payload.token))
