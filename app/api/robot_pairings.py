@@ -7,11 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_admin
+from app.api.deps import get_current_user
 from app.config import get_settings
 from app.database import get_db
-from app.models import Project, RobotPairingToken, User
+from app.models import Project, ProjectMember, RobotPairingToken, User
 from app.schemas import (
+    ProjectResponse,
     RobotPairingClaimResponse,
     RobotPairingTokenClaimRequest,
     RobotPairingTokenCreateRequest,
@@ -38,6 +39,72 @@ def _resolve_robot_user(robot_id: str, db: Session) -> User:
     return robot
 
 
+def _project_to_response(project: Project) -> ProjectResponse:
+    return ProjectResponse(
+        id=project.id,
+        name=project.name,
+        slug=project.slug,
+        description=project.description,
+        location=project.location,
+        status=project.status,
+        owner_id=project.owner_id,
+        floorplan_url=f"/api/projects/{project.id}/floorplan" if project.floorplan_url else None,
+        created_at=project.created_at,
+        updated_at=project.updated_at or project.created_at,
+    )
+
+
+def _owned_projects(current_user: User, db: Session) -> list[Project]:
+    if current_user.is_admin:
+        return db.scalars(select(Project).order_by(Project.name.asc())).all()
+    stmt = (
+        select(Project)
+        .outerjoin(ProjectMember, ProjectMember.project_id == Project.id)
+        .where(
+            or_(
+                Project.owner_id == current_user.id,
+                (
+                    (ProjectMember.user_id == current_user.id)
+                    & (ProjectMember.role == "owner")
+                ),
+            )
+        )
+        .order_by(Project.name.asc())
+    )
+    return db.scalars(stmt).unique().all()
+
+
+def _require_pairing_project_access(
+    *,
+    project_slug: str | None,
+    current_user: User,
+    db: Session,
+) -> Project | None:
+    if not project_slug:
+        if current_user.is_admin:
+            return None
+        raise HTTPException(status_code=403, detail="Project owners must choose a project they own")
+
+    project = db.scalar(select(Project).where(Project.slug == project_slug))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if current_user.is_admin:
+        return project
+    if project.owner_id == current_user.id:
+        return project
+
+    member = db.scalar(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project.id,
+            ProjectMember.user_id == current_user.id,
+        )
+    )
+    if member is None or member.role != "owner":
+        raise HTTPException(status_code=403, detail="Only project owners can pair robots for this project")
+    return project
+
+
 def _to_response(token: RobotPairingToken) -> RobotPairingTokenResponse:
     return RobotPairingTokenResponse(
         id=token.id,
@@ -53,28 +120,41 @@ def _to_response(token: RobotPairingToken) -> RobotPairingTokenResponse:
     )
 
 
+@router.get("/robot-pairings/projects", response_model=list[ProjectResponse])
+def list_pairable_projects(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[ProjectResponse]:
+    return [_project_to_response(project) for project in _owned_projects(current_user, db)]
+
+
 @router.get("/robot-pairings", response_model=list[RobotPairingTokenResponse])
 def list_robot_pairings(
-    _: User = Depends(require_admin),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[RobotPairingTokenResponse]:
-    rows = db.scalars(
-        select(RobotPairingToken).order_by(RobotPairingToken.created_at.desc())
-    ).all()
+    stmt = select(RobotPairingToken).order_by(RobotPairingToken.created_at.desc())
+    if not current_user.is_admin:
+        owned_slugs = [project.slug for project in _owned_projects(current_user, db)]
+        if not owned_slugs:
+            return []
+        stmt = stmt.where(RobotPairingToken.default_project_slug.in_(owned_slugs))
+    rows = db.scalars(stmt).all()
     return [_to_response(row) for row in rows]
 
 
 @router.post("/robot-pairings", response_model=RobotPairingTokenResponse, status_code=201)
 def create_robot_pairing(
     payload: RobotPairingTokenCreateRequest,
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> RobotPairingTokenResponse:
     robot = _resolve_robot_user(payload.robot_id, db)
-    if payload.default_project_slug:
-        project = db.scalar(select(Project).where(Project.slug == payload.default_project_slug))
-        if project is None:
-            raise HTTPException(status_code=404, detail="Project not found")
+    _require_pairing_project_access(
+        project_slug=payload.default_project_slug,
+        current_user=current_user,
+        db=db,
+    )
 
     pairing = RobotPairingToken(
         token=secrets.token_urlsafe(24),
@@ -96,12 +176,17 @@ def create_robot_pairing(
 @router.post("/robot-pairings/{pairing_id}/revoke", response_model=RobotPairingTokenResponse)
 def revoke_robot_pairing(
     pairing_id: str,
-    _: User = Depends(require_admin),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> RobotPairingTokenResponse:
     pairing = db.scalar(select(RobotPairingToken).where(RobotPairingToken.id == pairing_id))
     if pairing is None:
         raise HTTPException(status_code=404, detail="Pairing token not found")
+    _require_pairing_project_access(
+        project_slug=pairing.default_project_slug,
+        current_user=current_user,
+        db=db,
+    )
     if pairing.revoked_at is None:
         pairing.revoked_at = _utc_now()
         db.commit()
