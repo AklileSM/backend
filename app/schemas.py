@@ -131,6 +131,53 @@ class RobotAccountCreateRequest(BaseModel):
     password: str = Field(min_length=8, max_length=128)
 
 
+class RobotPairingTokenCreateRequest(BaseModel):
+    robot_id: str = Field(min_length=1, max_length=64)
+    robot_password: str = Field(min_length=8, max_length=128)
+    default_project_slug: str | None = Field(default=None, min_length=1, max_length=100)
+    note: str | None = Field(default=None, max_length=255)
+    expires_in_hours: int = Field(default=24, ge=1, le=168)
+
+
+class RobotPairingTokenClaimRequest(BaseModel):
+    token: str = Field(min_length=8, max_length=255)
+    hostname: str | None = Field(default=None, max_length=255)
+
+
+class RobotPairingTokenResponse(BaseModel):
+    id: str
+    robot_id: str
+    token: str
+    default_project_slug: str | None = None
+    note: str | None = None
+    expires_at: datetime | None = None
+    claimed_at: datetime | None = None
+    claimed_hostname: str | None = None
+    revoked_at: datetime | None = None
+    created_at: datetime
+
+
+class RobotPairingClaimResponse(BaseModel):
+    robot_id: str
+    base_url: str
+    username: str
+    password: str
+    default_project_slug: str | None = None
+    default_room_slug: str | None = None
+    poll_interval_seconds: float = 5.0
+    heartbeat_interval_seconds: float = 30.0
+    pose_topic: str = "/amcl_pose"
+    ros2_bin: str = "ros2"
+    navigation_timeout: float = 120.0
+    capture_timeout: float = 30.0
+    upload_timeout: float = 600.0
+    continue_on_failure: bool = False
+    device: str = "/dev/video0"
+    resolution: str = "2880x1440"
+    input_format: str = "mjpeg"
+    ffmpeg_bin: str = "ffmpeg"
+
+
 class RobotHeartbeatRequest(BaseModel):
     robot_id: str
     status: str = Field(min_length=1, max_length=32)

@@ -416,6 +416,34 @@ class RobotPresence(Base):
     robot_user: Mapped[User] = relationship(back_populates="robot_presence")
 
 
+class RobotPairingToken(Base):
+    """One-time bootstrap token used to provision a robot agent."""
+
+    __tablename__ = "robot_pairing_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    token: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    robot_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    robot_username: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    robot_password_plaintext: Mapped[str] = mapped_column(String(128), nullable=False)
+    default_project_slug: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_by_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    claimed_hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+
 class RobotMission(Base):
     """A mission assigned to a robot for autonomous capture collection."""
 
