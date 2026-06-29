@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -432,12 +431,16 @@ def get_robot_status(
     return _presence_to_response(presence)
 
 
-@router.get("/robots/{robot_id}/missions/next", response_model=RobotMissionResponse)
+@router.get(
+    "/robots/{robot_id}/missions/next",
+    response_model=RobotMissionResponse,
+    responses={204: {"description": "No queued mission for this robot"}},
+)
 def get_next_robot_mission(
     robot_id: str,
     current_user: User = Depends(require_robot),
     db: Session = Depends(get_db),
-) -> RobotMissionResponse | None:
+) -> RobotMissionResponse | Response:
     _require_robot_identity(robot_id, current_user)
 
     mission = db.scalar(
@@ -450,7 +453,7 @@ def get_next_robot_mission(
         .options(joinedload(RobotMission.project), selectinload(RobotMission.steps))
     )
     if mission is None:
-        return None
+        return Response(status_code=204)
 
     mission.status = "dispatched"
     mission.dispatched_at = _utc_now()
