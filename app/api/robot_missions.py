@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import math
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.api.deps import get_current_user, require_robot
 from app.database import get_db
-from app.models import Project, ProjectMember, RobotMission, RobotMissionStep, RobotPresence, User
+from app.models import Project, ProjectMember, RobotCapturePoint, RobotMission, RobotMissionStep, RobotPresence, User
 from app.schemas import (
     RobotHeartbeatRequest,
+    RobotCapturePointCreateRequest,
+    RobotCapturePointResponse,
+    RobotCapturePointUpdateRequest,
     RobotMissionCreateRequest,
     RobotMissionResponse,
     RobotMissionStatusUpdateRequest,
@@ -54,6 +59,19 @@ def _require_project_editor(project: Project, user: User, db: Session) -> None:
         )
 
 
+def _require_project_access(project: Project, user: User, db: Session) -> None:
+    if user.is_admin:
+        return
+    member = db.scalar(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project.id,
+            ProjectMember.user_id == user.id,
+        )
+    )
+    if member is None:
+        raise HTTPException(status_code=403, detail="Project access required")
+
+
 def _require_robot_identity(robot_id: str, current_user: User) -> None:
     if current_user.id != robot_id and current_user.username != robot_id:
         raise HTTPException(status_code=403, detail="Robot path does not match authenticated robot account")
@@ -96,6 +114,91 @@ def _mission_to_response(mission: RobotMission) -> RobotMissionResponse:
         steps=[_step_to_response(step) for step in sorted(mission.steps, key=lambda s: s.sequence_index)],
         result=mission.result_json,
     )
+
+
+def _capture_point_to_response(point: RobotCapturePoint) -> RobotCapturePointResponse:
+    return RobotCapturePointResponse(
+        id=point.id,
+        project_id=point.project_id,
+        name=point.name,
+        room_slug=point.room_slug,
+        map_x=point.map_x,
+        map_y=point.map_y,
+        yaw=point.yaw,
+        floorplan_x=point.floorplan_x,
+        floorplan_y=point.floorplan_y,
+        source=point.source,
+        metadata=dict(point.metadata_json or {}),
+        created_at=point.created_at,
+        updated_at=point.updated_at,
+    )
+
+
+def _waypoint_name(waypoint: object, index: int) -> str:
+    if isinstance(waypoint, dict):
+        raw = waypoint.get("name") or waypoint.get("label") or waypoint.get("capture_point_id")
+        return str(raw or f"capture-point-{index}")
+    return str(waypoint)
+
+
+def _room_slug_for_waypoint(waypoint: object, name: str, room_slug_map: dict[str, str]) -> str:
+    if isinstance(waypoint, dict) and waypoint.get("room_slug"):
+        return str(waypoint["room_slug"])
+    return room_slug_map.get(name) or name
+
+
+def _capture_point_to_waypoint(point: RobotCapturePoint) -> dict:
+    half_yaw = float(point.yaw or 0.0) / 2.0
+    return {
+        "name": point.name,
+        "x": point.map_x,
+        "y": point.map_y,
+        "z": 0.0,
+        "qx": 0.0,
+        "qy": 0.0,
+        "qz": math.sin(half_yaw),
+        "qw": math.cos(half_yaw),
+        "yaw": point.yaw,
+        "frame": "map",
+        "room_slug": point.room_slug or point.name,
+        "capture_point_id": point.id,
+    }
+
+
+def _resolve_mission_waypoints(
+    *,
+    payload: RobotMissionCreateRequest,
+    project: Project,
+    db: Session,
+) -> tuple[list[object], dict[str, str], dict]:
+    waypoints: list[object] = list(payload.waypoints or [])
+    room_slug_map = {str(k): str(v) for k, v in payload.room_slug_map.items()}
+    capture_point_ids = [str(item) for item in payload.capture_point_ids]
+
+    if capture_point_ids:
+        points = db.scalars(
+            select(RobotCapturePoint).where(
+                RobotCapturePoint.project_id == project.id,
+                RobotCapturePoint.id.in_(capture_point_ids),
+            )
+        ).all()
+        by_id = {point.id: point for point in points}
+        missing = [point_id for point_id in capture_point_ids if point_id not in by_id]
+        if missing:
+            raise HTTPException(status_code=404, detail=f"Capture point not found: {missing[0]}")
+        for point_id in capture_point_ids:
+            point = by_id[point_id]
+            waypoint = _capture_point_to_waypoint(point)
+            waypoints.append(waypoint)
+            room_slug_map[point.name] = point.room_slug or point.name
+
+    if not waypoints:
+        raise HTTPException(status_code=422, detail="Provide at least one waypoint or capture point")
+
+    robot_meta = dict(payload.robot_meta)
+    if capture_point_ids:
+        robot_meta["capture_point_ids"] = capture_point_ids
+    return waypoints, room_slug_map, robot_meta
 
 
 def _presence_to_response(presence: RobotPresence) -> RobotPresenceResponse:
@@ -161,6 +264,155 @@ def list_robots(
     return [_robot_to_summary(robot, presence_by_user_id.get(robot.id)) for robot in robots]
 
 
+@router.get("/projects/{project_id}/robot-capture-points", response_model=list[RobotCapturePointResponse])
+def list_robot_capture_points(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[RobotCapturePointResponse]:
+    project = db.scalar(select(Project).where(Project.id == project_id))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    _require_project_access(project, current_user, db)
+
+    points = db.scalars(
+        select(RobotCapturePoint)
+        .where(RobotCapturePoint.project_id == project.id)
+        .order_by(RobotCapturePoint.name.asc())
+    ).all()
+    return [_capture_point_to_response(point) for point in points]
+
+
+@router.post(
+    "/projects/{project_id}/robot-capture-points",
+    response_model=RobotCapturePointResponse,
+    status_code=201,
+)
+def create_robot_capture_point(
+    project_id: str,
+    payload: RobotCapturePointCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotCapturePointResponse:
+    project = db.scalar(select(Project).where(Project.id == project_id))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    _require_project_editor(project, current_user, db)
+
+    point = RobotCapturePoint(
+        project_id=project.id,
+        name=payload.name.strip(),
+        room_slug=payload.room_slug.strip() if payload.room_slug else None,
+        map_x=payload.map_x,
+        map_y=payload.map_y,
+        yaw=payload.yaw,
+        floorplan_x=payload.floorplan_x,
+        floorplan_y=payload.floorplan_y,
+        source=payload.source,
+        metadata_json=payload.metadata,
+        created_by_user_id=current_user.id,
+    )
+    db.add(point)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Capture point name already exists for this project") from exc
+    db.refresh(point)
+
+    log_activity(
+        db,
+        project_id=project.id,
+        actor=current_user,
+        action="robot_capture_point.create",
+        target_type="robot_capture_point",
+        target_id=point.id,
+        metadata={"name": point.name, "room_slug": point.room_slug},
+    )
+    return _capture_point_to_response(point)
+
+
+@router.patch(
+    "/projects/{project_id}/robot-capture-points/{point_id}",
+    response_model=RobotCapturePointResponse,
+)
+def update_robot_capture_point(
+    project_id: str,
+    point_id: str,
+    payload: RobotCapturePointUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotCapturePointResponse:
+    project = db.scalar(select(Project).where(Project.id == project_id))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    _require_project_editor(project, current_user, db)
+
+    point = db.scalar(
+        select(RobotCapturePoint).where(
+            RobotCapturePoint.id == point_id,
+            RobotCapturePoint.project_id == project.id,
+        )
+    )
+    if point is None:
+        raise HTTPException(status_code=404, detail="Capture point not found")
+
+    data = payload.model_dump(exclude_unset=True)
+    if "name" in data and data["name"] is not None:
+        point.name = str(data["name"]).strip()
+    if "room_slug" in data:
+        point.room_slug = data["room_slug"].strip() if data["room_slug"] else None
+    for field in ("map_x", "map_y", "yaw", "floorplan_x", "floorplan_y", "source"):
+        if field in data:
+            setattr(point, field, data[field])
+    if "metadata" in data:
+        point.metadata_json = data["metadata"] or {}
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Capture point name already exists for this project") from exc
+    db.refresh(point)
+    return _capture_point_to_response(point)
+
+
+@router.delete("/projects/{project_id}/robot-capture-points/{point_id}", status_code=204)
+def delete_robot_capture_point(
+    project_id: str,
+    point_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    project = db.scalar(select(Project).where(Project.id == project_id))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    _require_project_editor(project, current_user, db)
+
+    point = db.scalar(
+        select(RobotCapturePoint).where(
+            RobotCapturePoint.id == point_id,
+            RobotCapturePoint.project_id == project.id,
+        )
+    )
+    if point is None:
+        raise HTTPException(status_code=404, detail="Capture point not found")
+    point_id_for_log = point.id
+    point_name = point.name
+    db.delete(point)
+    db.commit()
+    log_activity(
+        db,
+        project_id=project.id,
+        actor=current_user,
+        action="robot_capture_point.delete",
+        target_type="robot_capture_point",
+        target_id=point_id_for_log,
+        metadata={"name": point_name},
+    )
+    return Response(status_code=204)
+
+
 @router.get("/robot/missions", response_model=list[RobotMissionResponse])
 def list_robot_missions(
     robot_id: str | None = Query(default=None),
@@ -211,6 +463,11 @@ def create_robot_mission(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     _require_project_editor(project, current_user, db)
+    resolved_waypoints, room_slug_map, robot_meta = _resolve_mission_waypoints(
+        payload=payload,
+        project=project,
+        db=db,
+    )
 
     mission = RobotMission(
         robot_user_id=robot.id,
@@ -220,21 +477,22 @@ def create_robot_mission(
         status="queued",
         capture_mode=payload.capture_mode,
         capture_date=payload.capture_date,
-        waypoints_json=[str(x) for x in payload.waypoints],
-        room_slug_map_json={str(k): str(v) for k, v in payload.room_slug_map.items()},
+        waypoints_json=resolved_waypoints,
+        room_slug_map_json=room_slug_map,
         retry_policy_json=payload.retry_policy,
-        robot_meta_json=payload.robot_meta,
+        robot_meta_json=robot_meta,
     )
     db.add(mission)
     db.flush()
 
-    for index, waypoint in enumerate(payload.waypoints, start=1):
-        room_slug = payload.room_slug_map.get(waypoint) or waypoint
+    for index, waypoint in enumerate(resolved_waypoints, start=1):
+        waypoint_name = _waypoint_name(waypoint, index)
+        room_slug = _room_slug_for_waypoint(waypoint, waypoint_name, room_slug_map)
         db.add(
             RobotMissionStep(
                 mission_id=mission.id,
                 sequence_index=index,
-                waypoint_name=waypoint,
+                waypoint_name=waypoint_name,
                 room_slug=room_slug,
                 status="pending",
             )

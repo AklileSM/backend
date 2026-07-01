@@ -1,10 +1,13 @@
 from datetime import datetime
 
+import ast
+import io
 import mimetypes
 import re
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
+from PIL import Image
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -22,6 +25,7 @@ from app.schemas import (
     ProjectResponse,
     ProjectUpdateRequest,
     RoomCreateRequest,
+    RobotMapResponse,
     RoomResponse,
     RoomUpdateRequest,
 )
@@ -33,7 +37,6 @@ settings = get_settings()
 
 _ALLOWED_FLOORPLAN_TYPES = {"image/jpeg", "image/png", "image/webp"}
 _FLOORPLAN_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
-
 _SLUG_MAX_LEN = 100
 _SLUG_SUFFIX_LIMIT = 1000
 
@@ -100,6 +103,59 @@ def _room_to_response(r: Room) -> RoomResponse:
         project_id=r.project_id,
         floor_plan_coordinates=r.floor_plan_coordinates,
         sort_order=r.sort_order,
+    )
+
+
+def _parse_robot_map_yaml(raw: bytes) -> dict:
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Robot map YAML must be UTF-8 text") from exc
+    data: dict[str, object] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line or ":" not in line:
+            continue
+        key, raw_value = line.split(":", 1)
+        key = key.strip()
+        raw_value = raw_value.strip()
+        if key in {"resolution", "occupied_thresh", "free_thresh"}:
+            data[key] = float(raw_value)
+        elif key == "negate":
+            data[key] = int(raw_value)
+        elif key == "origin":
+            data[key] = ast.literal_eval(raw_value)
+        else:
+            data[key] = raw_value.strip("\"'")
+
+    resolution = data.get("resolution")
+    origin = data.get("origin")
+    if not isinstance(resolution, float) or not isinstance(origin, list) or len(origin) < 2:
+        raise HTTPException(status_code=400, detail="Robot map YAML must include resolution and origin")
+    return {
+        "resolution": resolution,
+        "origin_x": float(origin[0]),
+        "origin_y": float(origin[1]),
+        "origin_yaw": float(origin[2]) if len(origin) > 2 else 0.0,
+    }
+
+
+def _robot_map_response(project: Project) -> RobotMapResponse:
+    meta = project.robot_map_json if isinstance(project.robot_map_json, dict) else None
+    if not meta:
+        raise HTTPException(status_code=404, detail="No robot map uploaded")
+    version = str(meta.get("uploaded_at") or project.updated_at or "")
+    return RobotMapResponse(
+        image_url=f"/api/projects/{project.id}/robot-map/image?v={version}",
+        width=int(meta["width"]),
+        height=int(meta["height"]),
+        resolution=float(meta["resolution"]),
+        origin_x=float(meta["origin_x"]),
+        origin_y=float(meta["origin_y"]),
+        origin_yaw=float(meta.get("origin_yaw") or 0.0),
+        frame=str(meta.get("frame") or "map"),
+        yaml_object_name=meta.get("yaml_object_name"),
+        image_object_name=meta.get("image_object_name"),
     )
 
 
@@ -379,6 +435,135 @@ def delete_floorplan(
         project.updated_at = datetime.utcnow()
         db.commit()
         db.refresh(project)
+    return _project_to_response(project)
+
+
+# ---------------------------------------------------------------------------
+# Robot map
+# ---------------------------------------------------------------------------
+
+@router.get("/{project_id}/robot-map", response_model=RobotMapResponse)
+def get_robot_map(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotMapResponse:
+    project = _get_project_or_404(project_id, db)
+    _get_member_or_403(project_id, current_user, db)
+    return _robot_map_response(project)
+
+
+@router.get("/{project_id}/robot-map/image", response_model=None)
+def get_robot_map_image(
+    project_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    project = _get_project_or_404(project_id, db)
+    meta = project.robot_map_json if isinstance(project.robot_map_json, dict) else None
+    if not meta or not meta.get("image_object_name"):
+        raise HTTPException(status_code=404, detail="No robot map uploaded")
+    object_name = str(meta["image_object_name"])
+
+    try:
+        stat = storage_service.stat_object(settings.minio_bucket_floorplans, object_name)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Robot map image not found in storage")
+
+    etag = f'"{stat.etag}"' if stat.etag else None
+    if etag and request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)
+
+    data = storage_service.get_object_bytes(settings.minio_bucket_floorplans, object_name)
+    content_type = mimetypes.guess_type(object_name)[0] or "image/png"
+    headers = {"Content-Length": str(len(data)), "Cache-Control": "public, max-age=86400"}
+    if etag:
+        headers["ETag"] = etag
+    return Response(content=data, media_type=content_type, headers=headers)
+
+
+@router.post("/{project_id}/robot-map", response_model=RobotMapResponse)
+async def upload_robot_map(
+    project_id: str,
+    yaml_file: UploadFile = File(...),
+    image_file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotMapResponse:
+    project = _get_project_or_404(project_id, db)
+    member = _get_member_or_403(project_id, current_user, db)
+    if member is not None and member.role not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="Only project owners and editors can upload a robot map")
+
+    yaml_bytes = await yaml_file.read()
+    image_bytes = await image_file.read()
+    parsed = _parse_robot_map_yaml(yaml_bytes)
+
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            width, height = image.size
+            out = io.BytesIO()
+            image.convert("L").save(out, format="PNG")
+            png_bytes = out.getvalue()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Robot map image must be a readable image/PGM file") from exc
+
+    yaml_object_name = f"{project_id}/robot-map/map.yaml"
+    image_object_name = f"{project_id}/robot-map/map.png"
+    storage_service.upload_bytes(
+        bucket_name=settings.minio_bucket_floorplans,
+        object_name=yaml_object_name,
+        data=yaml_bytes,
+        content_type="text/yaml",
+    )
+    storage_service.upload_bytes(
+        bucket_name=settings.minio_bucket_floorplans,
+        object_name=image_object_name,
+        data=png_bytes,
+        content_type="image/png",
+    )
+
+    old_meta = project.robot_map_json if isinstance(project.robot_map_json, dict) else {}
+    for old_name in (old_meta.get("yaml_object_name"), old_meta.get("image_object_name")):
+        if old_name and old_name not in {yaml_object_name, image_object_name}:
+            storage_service.remove_object_best_effort(settings.minio_bucket_floorplans, str(old_name))
+
+    project.robot_map_json = {
+        **parsed,
+        "width": width,
+        "height": height,
+        "frame": "map",
+        "yaml_object_name": yaml_object_name,
+        "image_object_name": image_object_name,
+        "source_yaml_name": yaml_file.filename,
+        "source_image_name": image_file.filename,
+        "uploaded_at": datetime.utcnow().isoformat(),
+    }
+    project.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(project)
+    return _robot_map_response(project)
+
+
+@router.delete("/{project_id}/robot-map", response_model=ProjectResponse)
+def delete_robot_map(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ProjectResponse:
+    project = _get_project_or_404(project_id, db)
+    member = _get_member_or_403(project_id, current_user, db)
+    if member is not None and member.role not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="Only project owners and editors can remove the robot map")
+
+    meta = project.robot_map_json if isinstance(project.robot_map_json, dict) else {}
+    for object_name in (meta.get("yaml_object_name"), meta.get("image_object_name")):
+        if object_name:
+            storage_service.remove_object_best_effort(settings.minio_bucket_floorplans, str(object_name))
+    project.robot_map_json = None
+    project.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(project)
     return _project_to_response(project)
 
 

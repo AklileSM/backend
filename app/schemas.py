@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class MediaFileResponse(BaseModel):
@@ -71,6 +71,19 @@ class ProjectResponse(BaseModel):
     floorplan_url: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class RobotMapResponse(BaseModel):
+    image_url: str
+    width: int
+    height: int
+    resolution: float
+    origin_x: float
+    origin_y: float
+    origin_yaw: float
+    frame: str = "map"
+    yaml_object_name: str | None = None
+    image_object_name: str | None = None
 
 
 class ProjectCreateRequest(BaseModel):
@@ -203,15 +216,62 @@ class RobotSummaryResponse(BaseModel):
     last_seen_at: datetime | None = None
 
 
+class RobotCapturePointCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    room_slug: str | None = Field(default=None, max_length=100)
+    map_x: float
+    map_y: float
+    yaw: float = 0.0
+    floorplan_x: float | None = None
+    floorplan_y: float | None = None
+    source: str = Field(default="manual", min_length=1, max_length=32)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RobotCapturePointUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    room_slug: str | None = Field(default=None, max_length=100)
+    map_x: float | None = None
+    map_y: float | None = None
+    yaw: float | None = None
+    floorplan_x: float | None = None
+    floorplan_y: float | None = None
+    source: str | None = Field(default=None, min_length=1, max_length=32)
+    metadata: dict[str, Any] | None = None
+
+
+class RobotCapturePointResponse(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    room_slug: str | None = None
+    map_x: float
+    map_y: float
+    yaw: float
+    floorplan_x: float | None = None
+    floorplan_y: float | None = None
+    source: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
 class RobotMissionCreateRequest(BaseModel):
     robot_id: str = Field(min_length=1, max_length=64)
     project_slug: str = Field(min_length=1, max_length=100)
-    waypoints: list[str] = Field(min_length=1)
+    waypoints: list[Any] = Field(default_factory=list)
+    capture_point_ids: list[str] = Field(default_factory=list)
     room_slug_map: dict[str, str] = Field(default_factory=dict)
     capture_mode: str = Field(default="panorama", min_length=1, max_length=32)
     capture_date: date
     retry_policy: dict[str, Any] = Field(default_factory=dict)
     robot_meta: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_waypoints_or_capture_points(self) -> "RobotMissionCreateRequest":
+        if not self.waypoints and not self.capture_point_ids:
+            raise ValueError("Provide at least one waypoint or capture point")
+        return self
 
 
 class RobotMissionStepResponse(BaseModel):
@@ -236,7 +296,7 @@ class RobotMissionResponse(BaseModel):
     status: str
     capture_mode: str
     capture_date: date
-    waypoints: list[str] = Field(default_factory=list)
+    waypoints: list[Any] = Field(default_factory=list)
     room_slug_map: dict[str, str] = Field(default_factory=dict)
     retry_policy: dict[str, Any] = Field(default_factory=dict)
     robot_meta: dict[str, Any] = Field(default_factory=dict)

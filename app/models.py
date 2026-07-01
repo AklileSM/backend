@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -81,6 +81,7 @@ class Project(Base):
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     floorplan_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    robot_map_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
@@ -92,6 +93,9 @@ class Project(Base):
         back_populates="project", cascade="all, delete-orphan"
     )
     robot_missions: Mapped[list["RobotMission"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    robot_capture_points: Mapped[list["RobotCapturePoint"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
 
@@ -444,6 +448,44 @@ class RobotPairingToken(Base):
     )
 
 
+class RobotCapturePoint(Base):
+    """Reusable project-level capture waypoint for autonomous robot missions.
+
+    map_x/map_y/yaw are in the Nav2 map frame and are the values the robot uses
+    to drive. floorplan_x/floorplan_y are optional normalized image coordinates
+    used only to draw the point on the SiteScope floorplan.
+    """
+
+    __tablename__ = "robot_capture_points"
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_robot_capture_points_project_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    room_slug: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    map_x: Mapped[float] = mapped_column(Float, nullable=False)
+    map_y: Mapped[float] = mapped_column(Float, nullable=False)
+    yaw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    floorplan_x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    floorplan_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_by_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    project: Mapped[Project] = relationship(back_populates="robot_capture_points")
+    created_by_user: Mapped["User | None"] = relationship()
+
+
 class RobotMission(Base):
     """A mission assigned to a robot for autonomous capture collection."""
 
@@ -463,7 +505,7 @@ class RobotMission(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
     capture_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="panorama")
     capture_date: Mapped[date] = mapped_column(Date, nullable=False)
-    waypoints_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    waypoints_json: Mapped[list] = mapped_column(JSON, nullable=False)
     room_slug_map_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     retry_policy_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     robot_meta_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)

@@ -26,6 +26,7 @@ create_all and before seeding:
   8. ensure_project_floorplan_url
   9. ensure_rooms_fields
   10. ensure_rooms_slug_scoped_to_project
+  11. ensure_robot_capture_points_table
 
 How to add a new migration
 --------------------------
@@ -143,6 +144,19 @@ def ensure_project_floorplan_url(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE projects ADD COLUMN floorplan_url VARCHAR(500)"))
     logger.info("Added projects.floorplan_url column")
+
+
+def ensure_project_robot_map_json(engine: Engine) -> None:
+    """Add robot_map_json to projects if missing."""
+    inspector = inspect(engine)
+    if not inspector.has_table("projects"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("projects")}
+    if "robot_map_json" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE projects ADD COLUMN robot_map_json JSON"))
+    logger.info("Added projects.robot_map_json column")
 
 
 def ensure_rooms_fields(engine: Engine) -> None:
@@ -381,6 +395,57 @@ def ensure_project_members_table(engine: Engine) -> None:
                 )
             """))
     logger.info("Created project_members table")
+
+
+def ensure_robot_capture_points_table(engine: Engine) -> None:
+    """Create robot_capture_points table if it does not exist."""
+    inspector = inspect(engine)
+    if inspector.has_table("robot_capture_points"):
+        return
+
+    dialect = engine.dialect.name
+    with engine.begin() as conn:
+        if dialect == "postgresql":
+            conn.execute(text("""
+                CREATE TABLE robot_capture_points (
+                    id VARCHAR(36) PRIMARY KEY,
+                    project_id VARCHAR(36) NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    name VARCHAR(255) NOT NULL,
+                    room_slug VARCHAR(100),
+                    map_x DOUBLE PRECISION NOT NULL,
+                    map_y DOUBLE PRECISION NOT NULL,
+                    yaw DOUBLE PRECISION NOT NULL DEFAULT 0,
+                    floorplan_x DOUBLE PRECISION,
+                    floorplan_y DOUBLE PRECISION,
+                    source VARCHAR(32) NOT NULL DEFAULT 'manual',
+                    metadata_json JSON,
+                    created_by_user_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    CONSTRAINT uq_robot_capture_points_project_name UNIQUE (project_id, name)
+                )
+            """))
+        else:
+            conn.execute(text("""
+                CREATE TABLE robot_capture_points (
+                    id VARCHAR(36) PRIMARY KEY,
+                    project_id VARCHAR(36) NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    name VARCHAR(255) NOT NULL,
+                    room_slug VARCHAR(100),
+                    map_x FLOAT NOT NULL,
+                    map_y FLOAT NOT NULL,
+                    yaw FLOAT NOT NULL DEFAULT 0,
+                    floorplan_x FLOAT,
+                    floorplan_y FLOAT,
+                    source VARCHAR(32) NOT NULL DEFAULT 'manual',
+                    metadata_json JSON,
+                    created_by_user_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (project_id, name)
+                )
+            """))
+    logger.info("Created robot_capture_points table")
 
 
 def ensure_project_activity_table(engine: Engine) -> None:

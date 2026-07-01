@@ -14,10 +14,12 @@ from app.services.db_migrations import (
     ensure_file_assets_ai_description,
     ensure_file_assets_sha256_hash,
     ensure_project_floorplan_url,
+    ensure_project_robot_map_json,
     ensure_project_members_table,
     ensure_projects_fields,
     ensure_projects_owner_name_unique,
     ensure_reports_label,
+    ensure_robot_capture_points_table,
     ensure_rooms_fields,
     ensure_rooms_project_name_unique,
     ensure_rooms_slug_scoped_to_project,
@@ -58,6 +60,7 @@ async def lifespan(_: FastAPI):
     ensure_projects_fields(engine)
     ensure_project_members_table(engine)
     ensure_project_floorplan_url(engine)
+    ensure_project_robot_map_json(engine)
     ensure_rooms_fields(engine)
     ensure_rooms_slug_scoped_to_project(engine)
     ensure_projects_owner_name_unique(engine)
@@ -65,6 +68,7 @@ async def lifespan(_: FastAPI):
     ensure_users_email_fields(engine)
     ensure_users_is_robot(engine)
     ensure_reports_label(engine)
+    ensure_robot_capture_points_table(engine)
     ensure_annotations_extensions(engine)
     ensure_project_activity_table(engine)
     ensure_search_trigram_indexes(engine)
