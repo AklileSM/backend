@@ -150,11 +150,22 @@ def create_robot_pairing(
     db: Session = Depends(get_db),
 ) -> RobotPairingTokenResponse:
     robot = _resolve_robot_user(payload.robot_id, db)
-    _require_pairing_project_access(
+    project = _require_pairing_project_access(
         project_slug=payload.default_project_slug,
         current_user=current_user,
         db=db,
     )
+    if project is not None:
+        membership = db.scalar(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.user_id == robot.id,
+            )
+        )
+        if membership is None:
+            db.add(ProjectMember(project_id=project.id, user_id=robot.id, role="editor"))
+        elif membership.role == "viewer":
+            membership.role = "editor"
 
     pairing = RobotPairingToken(
         token=secrets.token_urlsafe(24),
