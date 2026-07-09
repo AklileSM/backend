@@ -182,13 +182,15 @@ class RobotPairingClaimResponse(BaseModel):
     pose_topic: str = "/amcl_pose"
     ros2_bin: str = "ros2"
     navigation_timeout: float = 120.0
-    capture_timeout: float = 30.0
+    capture_timeout: float = 90.0
     upload_timeout: float = 600.0
     continue_on_failure: bool = False
     device: str = "/dev/video0"
     resolution: str = "2880x1440"
     input_format: str = "mjpeg"
     ffmpeg_bin: str = "ffmpeg"
+    capture_backend: str = "insta360_sdk"
+    sdk_capture_cmd: str | None = "/home/unitree/SiteScope/robot/sitescope_capture_still --output {output_path}"
 
 
 class RobotHeartbeatRequest(BaseModel):
@@ -205,6 +207,39 @@ class RobotPresenceResponse(BaseModel):
     current_mission_id: str | None = None
     hostname: str | None = None
     last_seen_at: datetime
+
+
+class RobotTelemetryPoint(BaseModel):
+    x: float
+    y: float
+    z: float = 0.0
+    yaw: float | None = None
+
+
+class RobotTelemetryVelocity(BaseModel):
+    linear_x: float = 0.0
+    linear_y: float = 0.0
+    angular_z: float = 0.0
+    source_topic: str | None = None
+
+
+class RobotTelemetryRequest(BaseModel):
+    reported_at_utc: datetime | None = None
+    mission_id: str | None = None
+    frame: str = Field(default="map", min_length=1, max_length=64)
+    pose: RobotTelemetryPoint
+    velocity: RobotTelemetryVelocity | None = None
+    goal: RobotTelemetryPoint | None = None
+    global_path: list[RobotTelemetryPoint] = Field(default_factory=list)
+    local_path: list[RobotTelemetryPoint] = Field(default_factory=list)
+    active_waypoint: dict[str, Any] | None = None
+    status: str | None = Field(default=None, max_length=32)
+    source: str | None = Field(default=None, max_length=64)
+
+
+class RobotTelemetryResponse(RobotTelemetryRequest):
+    robot_id: str
+    received_at_utc: datetime
 
 
 class RobotSummaryResponse(BaseModel):

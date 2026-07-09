@@ -21,6 +21,8 @@ from app.schemas import (
     RobotMissionStepResponse,
     RobotPresenceResponse,
     RobotSummaryResponse,
+    RobotTelemetryRequest,
+    RobotTelemetryResponse,
 )
 from app.services.activity import log_activity
 
@@ -209,6 +211,21 @@ def _presence_to_response(presence: RobotPresence) -> RobotPresenceResponse:
         hostname=presence.hostname,
         last_seen_at=presence.last_seen_at,
     )
+
+
+def _presence_payload(presence: RobotPresence) -> dict:
+    return dict(presence.payload_json or {}) if isinstance(presence.payload_json, dict) else {}
+
+
+def _telemetry_to_response(presence: RobotPresence) -> RobotTelemetryResponse:
+    payload = _presence_payload(presence)
+    telemetry = payload.get("telemetry")
+    if not isinstance(telemetry, dict):
+        raise HTTPException(status_code=404, detail="Robot telemetry not found")
+    return RobotTelemetryResponse.model_validate({
+        **telemetry,
+        "robot_id": presence.robot_username,
+    })
 
 
 def _robot_to_summary(robot: User, presence: RobotPresence | None) -> RobotSummaryResponse:
@@ -661,7 +678,9 @@ def post_robot_heartbeat(
     presence.status = payload.status
     presence.current_mission_id = payload.current_mission_id
     presence.hostname = payload.hostname
-    presence.payload_json = payload.model_dump(mode="json")
+    presence_payload = _presence_payload(presence)
+    presence_payload["heartbeat"] = payload.model_dump(mode="json")
+    presence.payload_json = presence_payload
     presence.last_seen_at = (
         payload.reported_at_utc.replace(tzinfo=None) if payload.reported_at_utc else _utc_now()
     )
@@ -687,6 +706,56 @@ def get_robot_status(
     if presence is None:
         raise HTTPException(status_code=404, detail="Robot status not found")
     return _presence_to_response(presence)
+
+
+@router.post("/robots/{robot_id}/telemetry", response_model=RobotTelemetryResponse)
+def post_robot_telemetry(
+    robot_id: str,
+    payload: RobotTelemetryRequest,
+    current_user: User = Depends(require_robot),
+    db: Session = Depends(get_db),
+) -> RobotTelemetryResponse:
+    _require_robot_identity(robot_id, current_user)
+    robot = _resolve_robot_user(robot_id, db)
+
+    presence = db.scalar(select(RobotPresence).where(RobotPresence.robot_user_id == robot.id))
+    if presence is None:
+        presence = RobotPresence(
+            robot_user_id=robot.id,
+            robot_username=robot.username,
+        )
+        db.add(presence)
+
+    now = _utc_now()
+    telemetry = payload.model_dump(mode="json")
+    telemetry["received_at_utc"] = datetime.now(timezone.utc).isoformat()
+    presence_payload = _presence_payload(presence)
+    presence_payload["telemetry"] = telemetry
+    presence.payload_json = presence_payload
+    if payload.status:
+        presence.status = payload.status
+    if payload.mission_id:
+        presence.current_mission_id = payload.mission_id
+    presence.last_seen_at = payload.reported_at_utc.replace(tzinfo=None) if payload.reported_at_utc else now
+
+    db.commit()
+    db.refresh(presence)
+    return _telemetry_to_response(presence)
+
+
+@router.get("/robots/{robot_id}/telemetry", response_model=RobotTelemetryResponse)
+def get_robot_telemetry(
+    robot_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotTelemetryResponse:
+    if current_user.is_robot:
+        _require_robot_identity(robot_id, current_user)
+    robot = _resolve_robot_user(robot_id, db)
+    presence = db.scalar(select(RobotPresence).where(RobotPresence.robot_user_id == robot.id))
+    if presence is None:
+        raise HTTPException(status_code=404, detail="Robot status not found")
+    return _telemetry_to_response(presence)
 
 
 @router.get(
