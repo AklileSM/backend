@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
+import json
 import math
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+import threading
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.api.deps import get_current_user, require_robot
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.models import Project, ProjectMember, RobotCapturePoint, RobotMission, RobotMissionStep, RobotPresence, User
 from app.schemas import (
     RobotHeartbeatRequest,
@@ -27,6 +31,9 @@ from app.schemas import (
 from app.services.activity import log_activity
 
 router = APIRouter()
+
+_TELEMETRY_SUBSCRIBERS: dict[str, set[tuple[asyncio.AbstractEventLoop, asyncio.Queue]]] = {}
+_TELEMETRY_SUBSCRIBERS_LOCK = threading.Lock()
 
 
 def _utc_now() -> datetime:
@@ -226,6 +233,44 @@ def _telemetry_to_response(presence: RobotPresence) -> RobotTelemetryResponse:
         **telemetry,
         "robot_id": presence.robot_username,
     })
+
+
+def _latest_robot_telemetry_payload(robot_user_id: str, db: Session) -> dict | None:
+    db.expire_all()
+    presence = db.scalar(select(RobotPresence).where(RobotPresence.robot_user_id == robot_user_id))
+    if presence is None:
+        return None
+    try:
+        return _telemetry_to_response(presence).model_dump(mode="json")
+    except HTTPException:
+        return None
+
+
+def _telemetry_signature(payload: dict) -> str:
+    signature = str(payload.get("received_at_utc") or "")
+    if signature:
+        return signature
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _put_latest_telemetry(queue: asyncio.Queue, payload: dict) -> None:
+    while queue.full():
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+    queue.put_nowait(payload)
+
+
+def _publish_robot_telemetry(robot_user_id: str, payload: dict) -> None:
+    with _TELEMETRY_SUBSCRIBERS_LOCK:
+        subscribers = tuple(_TELEMETRY_SUBSCRIBERS.get(robot_user_id, set()))
+    for loop, queue in subscribers:
+        if not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(_put_latest_telemetry, queue, payload)
+            except RuntimeError:
+                pass
 
 
 def _robot_to_summary(robot: User, presence: RobotPresence | None) -> RobotSummaryResponse:
@@ -740,7 +785,9 @@ def post_robot_telemetry(
 
     db.commit()
     db.refresh(presence)
-    return _telemetry_to_response(presence)
+    response = _telemetry_to_response(presence)
+    _publish_robot_telemetry(robot.id, response.model_dump(mode="json"))
+    return response
 
 
 @router.get("/robots/{robot_id}/telemetry", response_model=RobotTelemetryResponse)
@@ -756,6 +803,66 @@ def get_robot_telemetry(
     if presence is None:
         raise HTTPException(status_code=404, detail="Robot status not found")
     return _telemetry_to_response(presence)
+
+
+@router.get("/robots/{robot_id}/telemetry/stream")
+async def stream_robot_telemetry(
+    robot_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    if current_user.is_robot:
+        _require_robot_identity(robot_id, current_user)
+    robot = _resolve_robot_user(robot_id, db)
+    robot_user_id = robot.id
+
+    async def event_stream():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+        last_signature: str | None = None
+        last_keepalive_at = datetime.now(timezone.utc).timestamp()
+        stream_db = SessionLocal()
+        with _TELEMETRY_SUBSCRIBERS_LOCK:
+            _TELEMETRY_SUBSCRIBERS.setdefault(robot_user_id, set()).add((loop, queue))
+        try:
+            initial_payload = _latest_robot_telemetry_payload(robot_user_id, stream_db)
+            if initial_payload is not None:
+                _put_latest_telemetry(queue, initial_payload)
+            while not await request.is_disconnected():
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    payload = _latest_robot_telemetry_payload(robot_user_id, stream_db)
+
+                if payload is not None:
+                    signature = _telemetry_signature(payload)
+                    if signature != last_signature:
+                        last_signature = signature
+                        last_keepalive_at = datetime.now(timezone.utc).timestamp()
+                        yield f"{json.dumps(payload, separators=(',', ':'))}\n"
+
+                now = datetime.now(timezone.utc).timestamp()
+                if now - last_keepalive_at >= 15:
+                    last_keepalive_at = now
+                    yield "\n"
+        finally:
+            with _TELEMETRY_SUBSCRIBERS_LOCK:
+                subscribers = _TELEMETRY_SUBSCRIBERS.get(robot_user_id)
+                if subscribers is not None:
+                    subscribers.discard((loop, queue))
+                    if not subscribers:
+                        _TELEMETRY_SUBSCRIBERS.pop(robot_user_id, None)
+            stream_db.close()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get(
