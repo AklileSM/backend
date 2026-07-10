@@ -840,7 +840,7 @@ async def stream_robot_telemetry(
 
     async def event_stream():
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+        queue: asyncio.Queue = asyncio.Queue(maxsize=1)
         last_signature: str | None = None
         last_keepalive_at = datetime.now(timezone.utc).timestamp()
         stream_db = SessionLocal()
@@ -905,7 +905,7 @@ async def websocket_robot_telemetry(
 
         await websocket.accept()
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+        queue: asyncio.Queue = asyncio.Queue(maxsize=1)
         robot_user_id = robot.id
         last_signature: str | None = None
         last_keepalive_at = datetime.now(timezone.utc).timestamp()
