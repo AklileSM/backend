@@ -5,13 +5,14 @@ from datetime import datetime, timezone
 import json
 import math
 import threading
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.api.deps import get_current_user, require_robot
+from app.core.security import decode_access_token
 from app.database import SessionLocal, get_db
 from app.models import Project, ProjectMember, RobotCapturePoint, RobotMission, RobotMissionStep, RobotPresence, User
 from app.schemas import (
@@ -84,6 +85,26 @@ def _require_project_access(project: Project, user: User, db: Session) -> None:
 def _require_robot_identity(robot_id: str, current_user: User) -> None:
     if current_user.id != robot_id and current_user.username != robot_id:
         raise HTTPException(status_code=403, detail="Robot path does not match authenticated robot account")
+
+
+def _current_user_from_access_token(token: str | None, db: Session) -> User:
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = decode_access_token(token)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token") from None
+    if payload.get("type") != "access":
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user = db.scalar(select(User).where(User.id == user_id))
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not found")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account disabled")
+    return user
 
 
 def _step_to_response(step: RobotMissionStep) -> RobotMissionStepResponse:
@@ -863,6 +884,75 @@ async def stream_robot_telemetry(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.websocket("/robots/{robot_id}/telemetry/ws")
+async def websocket_robot_telemetry(
+    websocket: WebSocket,
+    robot_id: str,
+    token: str | None = Query(None),
+) -> None:
+    auth_db = SessionLocal()
+    try:
+        try:
+            current_user = _current_user_from_access_token(token, auth_db)
+            if current_user.is_robot:
+                _require_robot_identity(robot_id, current_user)
+            robot = _resolve_robot_user(robot_id, auth_db)
+        except HTTPException as exc:
+            await websocket.close(code=1008, reason=str(exc.detail))
+            return
+
+        await websocket.accept()
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+        robot_user_id = robot.id
+        last_signature: str | None = None
+        last_keepalive_at = datetime.now(timezone.utc).timestamp()
+
+        with _TELEMETRY_SUBSCRIBERS_LOCK:
+            _TELEMETRY_SUBSCRIBERS.setdefault(robot_user_id, set()).add((loop, queue))
+
+        try:
+            initial_payload = _latest_robot_telemetry_payload(robot_user_id, auth_db)
+            if initial_payload is not None:
+                last_signature = _telemetry_signature(initial_payload)
+                await websocket.send_json(initial_payload)
+
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    payload = _latest_robot_telemetry_payload(robot_user_id, auth_db)
+
+                if payload is not None:
+                    signature = _telemetry_signature(payload)
+                    if signature != last_signature:
+                        last_signature = signature
+                        last_keepalive_at = datetime.now(timezone.utc).timestamp()
+                        await websocket.send_json(payload)
+                        continue
+
+                now = datetime.now(timezone.utc).timestamp()
+                if now - last_keepalive_at >= 15:
+                    last_keepalive_at = now
+                    await websocket.send_json({
+                        "type": "keepalive",
+                        "server_time_utc": datetime.now(timezone.utc).isoformat(),
+                    })
+        except WebSocketDisconnect:
+            pass
+        except RuntimeError:
+            pass
+        finally:
+            with _TELEMETRY_SUBSCRIBERS_LOCK:
+                subscribers = _TELEMETRY_SUBSCRIBERS.get(robot_user_id)
+                if subscribers is not None:
+                    subscribers.discard((loop, queue))
+                    if not subscribers:
+                        _TELEMETRY_SUBSCRIBERS.pop(robot_user_id, None)
+    finally:
+        auth_db.close()
 
 
 @router.get(
