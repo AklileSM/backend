@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 import json
 import math
 import threading
+import time
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+from pydantic import ValidationError
 from fastapi.responses import StreamingResponse
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
@@ -35,6 +37,19 @@ router = APIRouter()
 
 _TELEMETRY_SUBSCRIBERS: dict[str, set[tuple[asyncio.AbstractEventLoop, asyncio.Queue]]] = {}
 _TELEMETRY_SUBSCRIBERS_LOCK = threading.Lock()
+
+# Latest telemetry frame per robot, response-shaped. Telemetry is ephemeral realtime data:
+# the pose arrives up to 10x per second and only the newest value matters, so routing every
+# frame through a Postgres commit (and reading it back out in every subscriber loop) added
+# a database round trip per frame for no durability we actually need. Frames now live here
+# and fan out from memory; the presence row is persisted on a slow cadence purely so the
+# last known pose survives a backend restart. In-process state is safe for the same reason
+# _TELEMETRY_SUBSCRIBERS is: uvicorn runs this app as a single process.
+_LATEST_TELEMETRY: dict[str, dict] = {}
+_LATEST_TELEMETRY_LOCK = threading.Lock()
+
+# How often the ingest socket flushes presence + last pose to Postgres.
+_TELEMETRY_PERSIST_SECONDS = 5.0
 
 
 def _utc_now() -> datetime:
@@ -257,6 +272,11 @@ def _telemetry_to_response(presence: RobotPresence) -> RobotTelemetryResponse:
 
 
 def _latest_robot_telemetry_payload(robot_user_id: str, db: Session) -> dict | None:
+    with _LATEST_TELEMETRY_LOCK:
+        cached = _LATEST_TELEMETRY.get(robot_user_id)
+    if cached is not None:
+        return cached
+    # Nothing in memory yet (backend restarted, robot quiet) — fall back to the persisted copy.
     db.expire_all()
     presence = db.scalar(select(RobotPresence).where(RobotPresence.robot_user_id == robot_user_id))
     if presence is None:
@@ -807,7 +827,10 @@ def post_robot_telemetry(
     db.commit()
     db.refresh(presence)
     response = _telemetry_to_response(presence)
-    _publish_robot_telemetry(robot.id, response.model_dump(mode="json"))
+    response_payload = response.model_dump(mode="json")
+    with _LATEST_TELEMETRY_LOCK:
+        _LATEST_TELEMETRY[robot.id] = response_payload
+    _publish_robot_telemetry(robot.id, response_payload)
     return response
 
 
@@ -820,10 +843,10 @@ def get_robot_telemetry(
     if current_user.is_robot:
         _require_robot_identity(robot_id, current_user)
     robot = _resolve_robot_user(robot_id, db)
-    presence = db.scalar(select(RobotPresence).where(RobotPresence.robot_user_id == robot.id))
-    if presence is None:
-        raise HTTPException(status_code=404, detail="Robot status not found")
-    return _telemetry_to_response(presence)
+    payload = _latest_robot_telemetry_payload(robot.id, db)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Robot telemetry not found")
+    return payload
 
 
 @router.get("/robots/{robot_id}/telemetry/stream")
@@ -953,6 +976,93 @@ async def websocket_robot_telemetry(
                         _TELEMETRY_SUBSCRIBERS.pop(robot_user_id, None)
     finally:
         auth_db.close()
+
+
+@router.websocket("/robots/{robot_id}/telemetry/ingest")
+async def websocket_robot_telemetry_ingest(
+    websocket: WebSocket,
+    robot_id: str,
+    token: str | None = Query(None),
+) -> None:
+    """Persistent uplink for the robot's telemetry bridge.
+
+    The bridge used to POST each frame, which pays a WAN round trip of HTTP overhead
+    per frame and forced a Postgres commit per frame on this side. Over one long-lived
+    socket a frame is a single small message: it is validated, cached in memory, fanned
+    out to live subscribers, and only flushed to the presence row every
+    _TELEMETRY_PERSIST_SECONDS so the last pose survives a restart.
+    """
+    db = SessionLocal()
+    try:
+        try:
+            current_user = _current_user_from_access_token(token, db)
+            if not current_user.is_robot:
+                raise HTTPException(status_code=403, detail="Robot account required")
+            _require_robot_identity(robot_id, current_user)
+            robot = _resolve_robot_user(robot_id, db)
+        except HTTPException as exc:
+            await websocket.close(code=1008, reason=str(exc.detail))
+            return
+
+        await websocket.accept()
+        robot_user_id = robot.id
+        robot_username = robot.username
+        last_persisted = 0.0
+        pending: tuple[RobotTelemetryRequest, dict] | None = None
+
+        def persist(payload: RobotTelemetryRequest, telemetry: dict) -> None:
+            presence = db.scalar(
+                select(RobotPresence).where(RobotPresence.robot_user_id == robot_user_id)
+            )
+            if presence is None:
+                presence = RobotPresence(robot_user_id=robot_user_id, robot_username=robot_username)
+                db.add(presence)
+            presence_payload = _presence_payload(presence)
+            presence_payload["telemetry"] = telemetry
+            presence.payload_json = presence_payload
+            if payload.status:
+                presence.status = payload.status
+            if payload.mission_id:
+                presence.current_mission_id = payload.mission_id
+            presence.last_seen_at = (
+                payload.reported_at_utc.replace(tzinfo=None) if payload.reported_at_utc else _utc_now()
+            )
+            db.commit()
+
+        try:
+            while True:
+                raw = await websocket.receive_json()
+                try:
+                    payload = RobotTelemetryRequest.model_validate(raw)
+                except ValidationError:
+                    # One malformed frame should not kill the uplink.
+                    continue
+
+                telemetry = payload.model_dump(mode="json")
+                telemetry["received_at_utc"] = datetime.now(timezone.utc).isoformat()
+                response_payload = {**telemetry, "robot_id": robot_username}
+                pending = (payload, telemetry)
+
+                with _LATEST_TELEMETRY_LOCK:
+                    _LATEST_TELEMETRY[robot_user_id] = response_payload
+                _publish_robot_telemetry(robot_user_id, response_payload)
+
+                now = time.monotonic()
+                if now - last_persisted >= _TELEMETRY_PERSIST_SECONDS:
+                    last_persisted = now
+                    persist(payload, telemetry)
+                    pending = None
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        finally:
+            if pending is not None:
+                # Flush the last unpersisted frame so a restart resumes from the true pose.
+                try:
+                    persist(*pending)
+                except Exception:
+                    db.rollback()
+    finally:
+        db.close()
 
 
 @router.get(
