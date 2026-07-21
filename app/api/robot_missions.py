@@ -1271,6 +1271,11 @@ def post_robot_command_status(
     if command.robot_user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Command not assigned to this robot")
 
+    # An operator can cancel a command mid-run; that is terminal and sticky, so a late agent
+    # update (the panel may still be finishing the bring-up in the background) must not revive it.
+    if command.status == "cancelled":
+        return _command_to_response(command)
+
     command.status = payload.status
     if payload.connection is not None:
         command.connection = payload.connection
@@ -1306,4 +1311,26 @@ def get_latest_robot_command(
     )
     if command is None:
         return Response(status_code=204)
+    return _command_to_response(command)
+
+
+@router.post("/robot/commands/{command_id}/cancel", response_model=RobotCommandResponse)
+def cancel_robot_command(
+    command_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotCommandResponse:
+    command = db.scalar(select(RobotCommand).where(RobotCommand.id == command_id))
+    if command is None:
+        raise HTTPException(status_code=404, detail="Command not found")
+
+    # Only an in-flight command can be cancelled; a finished one is returned unchanged so the
+    # UI's "cancel then retry" is always safe to call.
+    if command.status in _ACTIVE_COMMAND_STATUSES:
+        command.status = "cancelled"
+        command.connection = "disconnected"
+        command.detail = "Cancelled by the operator."
+        command.completed_at = _utc_now()
+        db.commit()
+        db.refresh(command)
     return _command_to_response(command)
