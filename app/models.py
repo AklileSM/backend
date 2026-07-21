@@ -565,3 +565,42 @@ class RobotMissionStep(Base):
 
     mission: Mapped[RobotMission] = relationship(back_populates="steps")
     uploaded_file: Mapped["FileAsset | None"] = relationship()
+
+
+class RobotCommand(Base):
+    """A one-shot lifecycle action for a robot's ROS stack (connect / disconnect).
+
+    Unlike a mission this visits no waypoints; it is the "Connect robot" button on the
+    SiteScope UI. It rides the same claim-by-poll / report-by-status rails as missions: the
+    operator enqueues it, the on-site agent claims the next queued one, drives the laptop
+    control panel through the bring-up choreography, and reports progress back. progress_json
+    holds the same progress_events shape the mission timeline renders, and connection carries
+    the resulting stack state so the button knows what to show.
+    """
+
+    __tablename__ = "robot_commands"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    robot_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    robot_username: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    requested_by_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)  # connect | disconnect
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    # disconnected | connecting | connected | disconnecting — the stack state this command left.
+    connection: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    progress_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    robot_user: Mapped[User] = relationship(foreign_keys=[robot_user_id])

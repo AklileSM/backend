@@ -16,8 +16,20 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.api.deps import get_current_user, require_robot
 from app.core.security import decode_access_token
 from app.database import SessionLocal, get_db
-from app.models import Project, ProjectMember, RobotCapturePoint, RobotMission, RobotMissionStep, RobotPresence, User
+from app.models import (
+    Project,
+    ProjectMember,
+    RobotCapturePoint,
+    RobotCommand,
+    RobotMission,
+    RobotMissionStep,
+    RobotPresence,
+    User,
+)
 from app.schemas import (
+    RobotCommandCreateRequest,
+    RobotCommandResponse,
+    RobotCommandStatusUpdateRequest,
     RobotHeartbeatRequest,
     RobotCapturePointCreateRequest,
     RobotCapturePointResponse,
@@ -158,6 +170,24 @@ def _mission_to_response(mission: RobotMission) -> RobotMissionResponse:
         cancelled_at=mission.cancelled_at,
         steps=[_step_to_response(step) for step in sorted(mission.steps, key=lambda s: s.sequence_index)],
         result=mission.result_json,
+    )
+
+
+_ACTIVE_COMMAND_STATUSES = ("queued", "dispatched", "running")
+
+
+def _command_to_response(command: RobotCommand) -> RobotCommandResponse:
+    return RobotCommandResponse(
+        id=command.id,
+        robot_id=command.robot_username,
+        kind=command.kind,
+        status=command.status,
+        connection=command.connection,
+        detail=command.detail,
+        progress_events=list((command.progress_json or {}).get("progress_events") or []),
+        created_at=command.created_at,
+        dispatched_at=command.dispatched_at,
+        completed_at=command.completed_at,
     )
 
 
@@ -1145,3 +1175,135 @@ def post_robot_mission_status(
             },
         )
     return _mission_to_response(mission)
+
+
+# -- robot lifecycle commands (connect / disconnect) ----------------------------
+# These ride the same claim-by-poll / report-by-status rails as missions: the operator
+# enqueues one, the on-site agent claims the next queued one and drives the laptop panel's
+# bring-up choreography, and reports the progress tree back for the "Connect robot" button.
+
+
+@router.post("/robot/commands", response_model=RobotCommandResponse, status_code=201)
+def create_robot_command(
+    payload: RobotCommandCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotCommandResponse:
+    robot = _resolve_robot_user(payload.robot_id, db)
+
+    # Robots are not scoped per-user in this tool (list_robots returns them all), so any
+    # authenticated operator may connect one — matching how missions and presence already work.
+
+    # One lifecycle command in flight at a time, so the progress tree can't show two
+    # overlapping sequences. A repeat of the same kind is idempotent (returns the in-flight
+    # one) so an operator clicking twice — or while the agent is still offline — is harmless;
+    # only a conflicting kind is rejected.
+    existing = db.scalar(
+        select(RobotCommand)
+        .where(
+            RobotCommand.robot_user_id == robot.id,
+            RobotCommand.status.in_(_ACTIVE_COMMAND_STATUSES),
+        )
+        .order_by(RobotCommand.created_at.desc())
+    )
+    if existing is not None:
+        if existing.kind == payload.kind:
+            return _command_to_response(existing)
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {existing.kind} is already in progress for this robot",
+        )
+
+    command = RobotCommand(
+        robot_user_id=robot.id,
+        robot_username=robot.username,
+        requested_by_user_id=current_user.id,
+        kind=payload.kind,
+        status="queued",
+        connection="connecting" if payload.kind == "connect" else "disconnecting",
+    )
+    db.add(command)
+    db.commit()
+    db.refresh(command)
+    return _command_to_response(command)
+
+
+@router.get(
+    "/robots/{robot_id}/commands/next",
+    response_model=RobotCommandResponse,
+    responses={204: {"description": "No queued command for this robot"}},
+)
+def get_next_robot_command(
+    robot_id: str,
+    current_user: User = Depends(require_robot),
+    db: Session = Depends(get_db),
+) -> RobotCommandResponse | Response:
+    _require_robot_identity(robot_id, current_user)
+
+    command = db.scalar(
+        select(RobotCommand)
+        .where(
+            RobotCommand.robot_user_id == current_user.id,
+            RobotCommand.status == "queued",
+        )
+        .order_by(RobotCommand.created_at.asc())
+    )
+    if command is None:
+        return Response(status_code=204)
+
+    command.status = "dispatched"
+    command.dispatched_at = _utc_now()
+    db.commit()
+    db.refresh(command)
+    return _command_to_response(command)
+
+
+@router.post("/robot/commands/{command_id}/status", response_model=RobotCommandResponse)
+def post_robot_command_status(
+    command_id: str,
+    payload: RobotCommandStatusUpdateRequest,
+    current_user: User = Depends(require_robot),
+    db: Session = Depends(get_db),
+) -> RobotCommandResponse:
+    command = db.scalar(select(RobotCommand).where(RobotCommand.id == command_id))
+    if command is None:
+        raise HTTPException(status_code=404, detail="Command not found")
+    if command.robot_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Command not assigned to this robot")
+
+    command.status = payload.status
+    if payload.connection is not None:
+        command.connection = payload.connection
+    if payload.detail is not None:
+        command.detail = payload.detail
+    if payload.progress_events is not None:
+        command.progress_json = {"progress_events": payload.progress_events}
+    if payload.completed_at_utc:
+        command.completed_at = payload.completed_at_utc.replace(tzinfo=None)
+    elif payload.status in ("succeeded", "failed"):
+        command.completed_at = _utc_now()
+
+    db.commit()
+    db.refresh(command)
+    return _command_to_response(command)
+
+
+@router.get(
+    "/robots/{robot_id}/commands/latest",
+    response_model=RobotCommandResponse,
+    responses={204: {"description": "This robot has no commands yet"}},
+)
+def get_latest_robot_command(
+    robot_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotCommandResponse | Response:
+    robot = _resolve_robot_user(robot_id, db)
+    command = db.scalar(
+        select(RobotCommand)
+        .where(RobotCommand.robot_user_id == robot.id)
+        .order_by(RobotCommand.created_at.desc())
+    )
+    if command is None:
+        return Response(status_code=204)
+    return _command_to_response(command)

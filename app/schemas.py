@@ -352,6 +352,32 @@ class RobotMissionStatusUpdateRequest(BaseModel):
     result: dict[str, Any] | None = None
 
 
+class RobotCommandCreateRequest(BaseModel):
+    robot_id: str = Field(min_length=1, max_length=64)
+    kind: str = Field(pattern=r"^(connect|disconnect)$")
+
+
+class RobotCommandStatusUpdateRequest(BaseModel):
+    status: str = Field(min_length=1, max_length=32)
+    connection: str | None = Field(default=None, max_length=32)
+    detail: str | None = None
+    progress_events: list[dict[str, Any]] | None = None
+    completed_at_utc: datetime | None = None
+
+
+class RobotCommandResponse(BaseModel):
+    id: str
+    robot_id: str
+    kind: str
+    status: str
+    connection: str | None = None
+    detail: str | None = None
+    progress_events: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: datetime
+    dispatched_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
 class RoomResponse(BaseModel):
     id: str
     name: str
