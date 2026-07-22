@@ -842,7 +842,6 @@ def post_robot_telemetry(
         )
         db.add(presence)
 
-    now = _utc_now()
     telemetry = payload.model_dump(mode="json")
     telemetry["received_at_utc"] = datetime.now(timezone.utc).isoformat()
     presence_payload = _presence_payload(presence)
@@ -852,7 +851,10 @@ def post_robot_telemetry(
         presence.status = payload.status
     if payload.mission_id:
         presence.current_mission_id = payload.mission_id
-    presence.last_seen_at = payload.reported_at_utc.replace(tzinfo=None) if payload.reported_at_utc else now
+    # Deliberately NOT touching last_seen_at here. Telemetry is produced on the laptop, which keeps
+    # publishing (AMCL republishes a pose) long after the robot itself is powered off. Letting it
+    # bump last_seen_at made a dead robot read as "online" forever. Robot liveness now comes only
+    # from the agent's /heartbeat, which runs on the robot and stops the moment it powers down.
 
     db.commit()
     db.refresh(presence)
@@ -1054,9 +1056,8 @@ async def websocket_robot_telemetry_ingest(
                 presence.status = payload.status
             if payload.mission_id:
                 presence.current_mission_id = payload.mission_id
-            presence.last_seen_at = (
-                payload.reported_at_utc.replace(tzinfo=None) if payload.reported_at_utc else _utc_now()
-            )
+            # See the HTTP /telemetry note: liveness comes only from the robot's /heartbeat, never
+            # from laptop-produced telemetry, so a powered-off robot stops reading as online.
             db.commit()
 
         try:
