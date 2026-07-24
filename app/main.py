@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -20,6 +21,7 @@ from app.services.db_migrations import (
     ensure_projects_owner_name_unique,
     ensure_reports_label,
     ensure_robot_capture_points_table,
+    ensure_robot_mission_scheduling,
     ensure_rooms_fields,
     ensure_rooms_project_name_unique,
     ensure_rooms_slug_scoped_to_project,
@@ -32,6 +34,7 @@ from app.services.db_migrations import (
     ensure_users_role_dropped,
 )
 from app.services.pointcloud import init_converter_pool, reset_interrupted_conversions, shutdown_converter_pool
+from app.services.robot_schedules import run_schedule_dispatcher
 from app.services.storage import storage_service
 
 settings = get_settings()
@@ -69,6 +72,7 @@ async def lifespan(_: FastAPI):
     ensure_users_is_robot(engine)
     ensure_reports_label(engine)
     ensure_robot_capture_points_table(engine)
+    ensure_robot_mission_scheduling(engine)
     ensure_annotations_extensions(engine)
     ensure_project_activity_table(engine)
     ensure_search_trigram_indexes(engine)
@@ -79,8 +83,16 @@ async def lifespan(_: FastAPI):
     cleanup_stale_uploads()
     reset_interrupted_conversions()
     init_converter_pool(max_workers=2)
-    yield
-    shutdown_converter_pool()
+    schedule_dispatcher_stop = asyncio.Event()
+    schedule_dispatcher_task = asyncio.create_task(
+        run_schedule_dispatcher(stop_event=schedule_dispatcher_stop)
+    )
+    try:
+        yield
+    finally:
+        schedule_dispatcher_stop.set()
+        await schedule_dispatcher_task
+        shutdown_converter_pool()
 
 
 app = FastAPI(

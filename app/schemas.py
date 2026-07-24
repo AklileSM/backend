@@ -309,6 +309,87 @@ class RobotMissionCreateRequest(BaseModel):
         return self
 
 
+class RobotMissionScheduleCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    robot_id: str = Field(min_length=1, max_length=64)
+    project_slug: str = Field(min_length=1, max_length=100)
+    capture_point_ids: list[str] = Field(min_length=1)
+    local_time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    timezone: str = Field(default="UTC", min_length=1, max_length=64)
+    weekdays: list[int] = Field(default_factory=lambda: list(range(7)), min_length=1)
+    enabled: bool = True
+    capture_mode: str = Field(default="panorama", min_length=1, max_length=32)
+    retry_policy: dict[str, Any] = Field(default_factory=dict)
+    robot_meta: dict[str, Any] = Field(default_factory=dict)
+    busy_policy: str = Field(default="skip", pattern=r"^(skip|queue)$")
+    auto_connect: bool = True
+    max_lateness_minutes: int = Field(default=30, ge=0, le=1440)
+
+    @model_validator(mode="after")
+    def validate_weekdays(self) -> "RobotMissionScheduleCreateRequest":
+        if any(day < 0 or day > 6 for day in self.weekdays):
+            raise ValueError("Weekdays must use Monday=0 through Sunday=6")
+        if len(set(self.weekdays)) != len(self.weekdays):
+            raise ValueError("Weekdays must not contain duplicates")
+        if len(set(self.capture_point_ids)) != len(self.capture_point_ids):
+            raise ValueError("Capture points must not contain duplicates")
+        return self
+
+
+class RobotMissionScheduleUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    robot_id: str | None = Field(default=None, min_length=1, max_length=64)
+    project_slug: str | None = Field(default=None, min_length=1, max_length=100)
+    capture_point_ids: list[str] | None = Field(default=None, min_length=1)
+    local_time: str | None = Field(default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    timezone: str | None = Field(default=None, min_length=1, max_length=64)
+    weekdays: list[int] | None = Field(default=None, min_length=1)
+    enabled: bool | None = None
+    capture_mode: str | None = Field(default=None, min_length=1, max_length=32)
+    retry_policy: dict[str, Any] | None = None
+    robot_meta: dict[str, Any] | None = None
+    busy_policy: str | None = Field(default=None, pattern=r"^(skip|queue)$")
+    auto_connect: bool | None = None
+    max_lateness_minutes: int | None = Field(default=None, ge=0, le=1440)
+
+    @model_validator(mode="after")
+    def validate_lists(self) -> "RobotMissionScheduleUpdateRequest":
+        if self.weekdays is not None:
+            if any(day < 0 or day > 6 for day in self.weekdays):
+                raise ValueError("Weekdays must use Monday=0 through Sunday=6")
+            if len(set(self.weekdays)) != len(self.weekdays):
+                raise ValueError("Weekdays must not contain duplicates")
+        if self.capture_point_ids is not None:
+            if len(set(self.capture_point_ids)) != len(self.capture_point_ids):
+                raise ValueError("Capture points must not contain duplicates")
+        return self
+
+
+class RobotMissionScheduleResponse(BaseModel):
+    id: str
+    name: str
+    robot_id: str
+    project_id: str
+    project_slug: str
+    capture_point_ids: list[str] = Field(default_factory=list)
+    local_time: str
+    timezone: str
+    weekdays: list[int] = Field(default_factory=list)
+    enabled: bool
+    capture_mode: str
+    retry_policy: dict[str, Any] = Field(default_factory=dict)
+    robot_meta: dict[str, Any] = Field(default_factory=dict)
+    busy_policy: str
+    auto_connect: bool
+    max_lateness_minutes: int
+    next_run_at: datetime | None = None
+    last_run_at: datetime | None = None
+    last_outcome: str | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class RobotMissionStepResponse(BaseModel):
     id: str
     sequence_index: int
@@ -335,6 +416,8 @@ class RobotMissionResponse(BaseModel):
     room_slug_map: dict[str, str] = Field(default_factory=dict)
     retry_policy: dict[str, Any] = Field(default_factory=dict)
     robot_meta: dict[str, Any] = Field(default_factory=dict)
+    schedule_id: str | None = None
+    scheduled_for: datetime | None = None
     created_at: datetime
     dispatched_at: datetime | None = None
     started_at: datetime | None = None

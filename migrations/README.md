@@ -75,6 +75,8 @@ ensure_rooms_fields
 ensure_rooms_slug_scoped_to_project
 ensure_users_email_fields
 ensure_reports_label
+ensure_robot_capture_points_table
+ensure_robot_mission_scheduling
 ensure_annotations_extensions
 ensure_project_activity_table
 ensure_search_trigram_indexes

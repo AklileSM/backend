@@ -50,6 +50,10 @@ class User(Base):
         back_populates="requested_by_user",
         foreign_keys="RobotMission.requested_by_user_id",
     )
+    requested_robot_mission_schedules: Mapped[list["RobotMissionSchedule"]] = relationship(
+        back_populates="requested_by_user",
+        foreign_keys="RobotMissionSchedule.requested_by_user_id",
+    )
 
 
 class Project(Base):
@@ -93,6 +97,9 @@ class Project(Base):
         back_populates="project", cascade="all, delete-orphan"
     )
     robot_missions: Mapped[list["RobotMission"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    robot_mission_schedules: Mapped[list["RobotMissionSchedule"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
     robot_capture_points: Mapped[list["RobotCapturePoint"]] = relationship(
@@ -486,10 +493,60 @@ class RobotCapturePoint(Base):
     created_by_user: Mapped["User | None"] = relationship()
 
 
+class RobotMissionSchedule(Base):
+    """A timezone-aware recurring template that materializes one-shot missions."""
+
+    __tablename__ = "robot_mission_schedules"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    robot_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    robot_username: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    project_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    requested_by_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
+    local_time: Mapped[str] = mapped_column(String(5), nullable=False)
+    # Python weekday numbers: Monday=0 through Sunday=6.
+    weekdays_json: Mapped[list] = mapped_column(JSON, nullable=False)
+    capture_point_ids_json: Mapped[list] = mapped_column(JSON, nullable=False)
+    capture_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="panorama")
+    retry_policy_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    robot_meta_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    busy_policy: Mapped[str] = mapped_column(String(16), nullable=False, default="skip")
+    auto_connect: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    max_lateness_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    robot_user: Mapped[User] = relationship(foreign_keys=[robot_user_id])
+    requested_by_user: Mapped["User | None"] = relationship(
+        back_populates="requested_robot_mission_schedules",
+        foreign_keys=[requested_by_user_id],
+    )
+    project: Mapped[Project] = relationship(back_populates="robot_mission_schedules")
+    missions: Mapped[list["RobotMission"]] = relationship(back_populates="schedule")
+
+
 class RobotMission(Base):
     """A mission assigned to a robot for autonomous capture collection."""
 
     __tablename__ = "robot_missions"
+    __table_args__ = (
+        UniqueConstraint("schedule_id", "scheduled_for", name="uq_robot_missions_schedule_occurrence"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     robot_user_id: Mapped[str] = mapped_column(
@@ -502,6 +559,13 @@ class RobotMission(Base):
     requested_by_user_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    schedule_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("robot_mission_schedules.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
     capture_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="panorama")
     capture_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -528,6 +592,7 @@ class RobotMission(Base):
         foreign_keys=[requested_by_user_id],
     )
     project: Mapped[Project] = relationship(back_populates="robot_missions")
+    schedule: Mapped["RobotMissionSchedule | None"] = relationship(back_populates="missions")
     steps: Mapped[list["RobotMissionStep"]] = relationship(
         back_populates="mission", cascade="all, delete-orphan"
     )

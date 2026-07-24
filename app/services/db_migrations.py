@@ -448,6 +448,46 @@ def ensure_robot_capture_points_table(engine: Engine) -> None:
     logger.info("Created robot_capture_points table")
 
 
+def ensure_robot_mission_scheduling(engine: Engine) -> None:
+    """Add recurring-schedule linkage to existing robot mission tables.
+
+    ``Base.metadata.create_all`` creates the new robot_mission_schedules table.
+    This migration handles the two columns that create_all cannot add to an
+    already-existing robot_missions table.
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("robot_missions"):
+        return
+    if not inspector.has_table("robot_mission_schedules"):
+        logger.warning("robot_mission_schedules table is missing; skipping mission linkage")
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("robot_missions")}
+    with engine.begin() as conn:
+        if "schedule_id" not in columns:
+            conn.execute(text(
+                "ALTER TABLE robot_missions ADD COLUMN schedule_id VARCHAR(36) "
+                "REFERENCES robot_mission_schedules(id) ON DELETE SET NULL"
+            ))
+        if "scheduled_for" not in columns:
+            conn.execute(text(
+                "ALTER TABLE robot_missions ADD COLUMN scheduled_for TIMESTAMP"
+            ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_robot_missions_schedule_id "
+            "ON robot_missions (schedule_id)"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_robot_missions_schedule_occurrence "
+            "ON robot_missions (schedule_id, scheduled_for)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_robot_mission_schedules_next_run_at "
+            "ON robot_mission_schedules (next_run_at)"
+        ))
+    logger.info("Ensured recurring robot mission schedule schema")
+
+
 def ensure_project_activity_table(engine: Engine) -> None:
     """Create the project_activity table on first deploy.
 

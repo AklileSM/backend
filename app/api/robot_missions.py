@@ -22,6 +22,7 @@ from app.models import (
     RobotCapturePoint,
     RobotCommand,
     RobotMission,
+    RobotMissionSchedule,
     RobotMissionStep,
     RobotPresence,
     User,
@@ -36,6 +37,9 @@ from app.schemas import (
     RobotCapturePointUpdateRequest,
     RobotMissionCreateRequest,
     RobotMissionResponse,
+    RobotMissionScheduleCreateRequest,
+    RobotMissionScheduleResponse,
+    RobotMissionScheduleUpdateRequest,
     RobotMissionStatusUpdateRequest,
     RobotMissionStepResponse,
     RobotPresenceResponse,
@@ -44,6 +48,13 @@ from app.schemas import (
     RobotTelemetryResponse,
 )
 from app.services.activity import log_activity
+from app.services.robot_schedules import (
+    materialize_schedule,
+    next_schedule_run,
+    ordered_capture_points,
+    utc_now,
+    validate_timezone,
+)
 
 router = APIRouter()
 
@@ -163,6 +174,8 @@ def _mission_to_response(mission: RobotMission) -> RobotMissionResponse:
         room_slug_map=dict(mission.room_slug_map_json or {}),
         retry_policy=dict(mission.retry_policy_json or {}),
         robot_meta=dict(mission.robot_meta_json or {}),
+        schedule_id=mission.schedule_id,
+        scheduled_for=mission.scheduled_for,
         created_at=mission.created_at,
         dispatched_at=mission.dispatched_at,
         started_at=mission.started_at,
@@ -170,6 +183,33 @@ def _mission_to_response(mission: RobotMission) -> RobotMissionResponse:
         cancelled_at=mission.cancelled_at,
         steps=[_step_to_response(step) for step in sorted(mission.steps, key=lambda s: s.sequence_index)],
         result=mission.result_json,
+    )
+
+
+def _schedule_to_response(schedule: RobotMissionSchedule) -> RobotMissionScheduleResponse:
+    return RobotMissionScheduleResponse(
+        id=schedule.id,
+        name=schedule.name,
+        robot_id=schedule.robot_username,
+        project_id=schedule.project_id,
+        project_slug=schedule.project.slug if schedule.project else "",
+        capture_point_ids=[str(item) for item in (schedule.capture_point_ids_json or [])],
+        local_time=schedule.local_time,
+        timezone=schedule.timezone,
+        weekdays=[int(item) for item in (schedule.weekdays_json or [])],
+        enabled=schedule.enabled,
+        capture_mode=schedule.capture_mode,
+        retry_policy=dict(schedule.retry_policy_json or {}),
+        robot_meta=dict(schedule.robot_meta_json or {}),
+        busy_policy=schedule.busy_policy,
+        auto_connect=schedule.auto_connect,
+        max_lateness_minutes=schedule.max_lateness_minutes,
+        next_run_at=schedule.next_run_at,
+        last_run_at=schedule.last_run_at,
+        last_outcome=schedule.last_outcome,
+        last_error=schedule.last_error,
+        created_at=schedule.created_at,
+        updated_at=schedule.updated_at,
     )
 
 
@@ -542,6 +582,311 @@ def delete_robot_capture_point(
         target_type="robot_capture_point",
         target_id=point_id_for_log,
         metadata={"name": point_name},
+    )
+    return Response(status_code=204)
+
+
+def _validate_schedule_configuration(
+    db: Session,
+    *,
+    project: Project,
+    capture_point_ids: list[str],
+    timezone_name: str,
+) -> None:
+    try:
+        validate_timezone(timezone_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _, missing = ordered_capture_points(
+        db,
+        project_id=project.id,
+        capture_point_ids=capture_point_ids,
+    )
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Capture point not found: {missing[0]}")
+
+
+@router.get("/robot/mission-schedules", response_model=list[RobotMissionScheduleResponse])
+def list_robot_mission_schedules(
+    robot_id: str | None = Query(default=None),
+    project_slug: str | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[RobotMissionScheduleResponse]:
+    stmt = (
+        select(RobotMissionSchedule)
+        .options(joinedload(RobotMissionSchedule.project))
+        .order_by(RobotMissionSchedule.created_at.desc())
+    )
+    if robot_id:
+        robot = _resolve_robot_user(robot_id, db)
+        stmt = stmt.where(RobotMissionSchedule.robot_user_id == robot.id)
+    if project_slug:
+        project = db.scalar(select(Project).where(Project.slug == project_slug))
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        stmt = stmt.where(RobotMissionSchedule.project_id == project.id)
+
+    if not current_user.is_admin:
+        if current_user.is_robot:
+            stmt = stmt.where(RobotMissionSchedule.robot_user_id == current_user.id)
+        else:
+            stmt = stmt.join(
+                Project, RobotMissionSchedule.project_id == Project.id
+            ).join(
+                ProjectMember, ProjectMember.project_id == Project.id
+            ).where(ProjectMember.user_id == current_user.id)
+
+    schedules = db.scalars(stmt).unique().all()
+    return [_schedule_to_response(schedule) for schedule in schedules]
+
+
+@router.post(
+    "/robot/mission-schedules",
+    response_model=RobotMissionScheduleResponse,
+    status_code=201,
+)
+def create_robot_mission_schedule(
+    payload: RobotMissionScheduleCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotMissionScheduleResponse:
+    robot = _resolve_robot_user(payload.robot_id, db)
+    project = db.scalar(select(Project).where(Project.slug == payload.project_slug))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    _require_project_editor(project, current_user, db)
+    _validate_schedule_configuration(
+        db,
+        project=project,
+        capture_point_ids=payload.capture_point_ids,
+        timezone_name=payload.timezone,
+    )
+
+    now = utc_now()
+    schedule = RobotMissionSchedule(
+        name=payload.name.strip(),
+        robot_user_id=robot.id,
+        robot_username=robot.username,
+        project_id=project.id,
+        requested_by_user_id=current_user.id,
+        enabled=payload.enabled,
+        timezone=payload.timezone,
+        local_time=payload.local_time,
+        weekdays_json=sorted(payload.weekdays),
+        capture_point_ids_json=list(payload.capture_point_ids),
+        capture_mode=payload.capture_mode,
+        retry_policy_json=dict(payload.retry_policy),
+        robot_meta_json=dict(payload.robot_meta),
+        busy_policy=payload.busy_policy,
+        auto_connect=payload.auto_connect,
+        max_lateness_minutes=payload.max_lateness_minutes,
+        next_run_at=(
+            next_schedule_run(
+                local_time=payload.local_time,
+                timezone_name=payload.timezone,
+                weekdays=payload.weekdays,
+                after_utc=now,
+            )
+            if payload.enabled
+            else None
+        ),
+    )
+    db.add(schedule)
+    db.commit()
+    schedule = db.scalar(
+        select(RobotMissionSchedule)
+        .where(RobotMissionSchedule.id == schedule.id)
+        .options(joinedload(RobotMissionSchedule.project))
+    )
+    assert schedule is not None
+
+    log_activity(
+        db,
+        project_id=project.id,
+        actor=current_user,
+        action="robot_mission_schedule.create",
+        target_type="robot_mission_schedule",
+        target_id=schedule.id,
+        metadata={
+            "name": schedule.name,
+            "robot_id": schedule.robot_username,
+            "local_time": schedule.local_time,
+            "timezone": schedule.timezone,
+        },
+    )
+    return _schedule_to_response(schedule)
+
+
+@router.patch(
+    "/robot/mission-schedules/{schedule_id}",
+    response_model=RobotMissionScheduleResponse,
+)
+def update_robot_mission_schedule(
+    schedule_id: str,
+    payload: RobotMissionScheduleUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotMissionScheduleResponse:
+    schedule = db.scalar(
+        select(RobotMissionSchedule)
+        .where(RobotMissionSchedule.id == schedule_id)
+        .options(joinedload(RobotMissionSchedule.project))
+    )
+    if schedule is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    _require_project_editor(schedule.project, current_user, db)
+
+    project = schedule.project
+    if payload.project_slug is not None and payload.project_slug != project.slug:
+        project = db.scalar(select(Project).where(Project.slug == payload.project_slug))
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        _require_project_editor(project, current_user, db)
+        schedule.project_id = project.id
+        schedule.project = project
+
+    if payload.robot_id is not None and payload.robot_id != schedule.robot_username:
+        robot = _resolve_robot_user(payload.robot_id, db)
+        schedule.robot_user_id = robot.id
+        schedule.robot_username = robot.username
+
+    capture_point_ids = (
+        list(payload.capture_point_ids)
+        if payload.capture_point_ids is not None
+        else [str(item) for item in (schedule.capture_point_ids_json or [])]
+    )
+    timezone_name = payload.timezone or schedule.timezone
+    _validate_schedule_configuration(
+        db,
+        project=project,
+        capture_point_ids=capture_point_ids,
+        timezone_name=timezone_name,
+    )
+
+    if payload.name is not None:
+        schedule.name = payload.name.strip()
+    if payload.capture_point_ids is not None:
+        schedule.capture_point_ids_json = capture_point_ids
+    if payload.local_time is not None:
+        schedule.local_time = payload.local_time
+    if payload.timezone is not None:
+        schedule.timezone = payload.timezone
+    if payload.weekdays is not None:
+        schedule.weekdays_json = sorted(payload.weekdays)
+    if payload.capture_mode is not None:
+        schedule.capture_mode = payload.capture_mode
+    if payload.retry_policy is not None:
+        schedule.retry_policy_json = dict(payload.retry_policy)
+    if payload.robot_meta is not None:
+        schedule.robot_meta_json = dict(payload.robot_meta)
+    if payload.busy_policy is not None:
+        schedule.busy_policy = payload.busy_policy
+    if payload.auto_connect is not None:
+        schedule.auto_connect = payload.auto_connect
+    if payload.max_lateness_minutes is not None:
+        schedule.max_lateness_minutes = payload.max_lateness_minutes
+    if payload.enabled is not None:
+        schedule.enabled = payload.enabled
+
+    timing_fields = {"local_time", "timezone", "weekdays", "enabled"}
+    if schedule.enabled and (timing_fields & payload.model_fields_set):
+        schedule.next_run_at = next_schedule_run(
+            local_time=schedule.local_time,
+            timezone_name=schedule.timezone,
+            weekdays=list(schedule.weekdays_json or []),
+            after_utc=utc_now(),
+        )
+    elif not schedule.enabled:
+        schedule.next_run_at = None
+
+    schedule.last_error = None
+    db.commit()
+    schedule = db.scalar(
+        select(RobotMissionSchedule)
+        .where(RobotMissionSchedule.id == schedule.id)
+        .options(joinedload(RobotMissionSchedule.project))
+    )
+    assert schedule is not None
+
+    log_activity(
+        db,
+        project_id=schedule.project_id,
+        actor=current_user,
+        action="robot_mission_schedule.update",
+        target_type="robot_mission_schedule",
+        target_id=schedule.id,
+        metadata={"name": schedule.name, "enabled": schedule.enabled},
+    )
+    return _schedule_to_response(schedule)
+
+
+@router.post(
+    "/robot/mission-schedules/{schedule_id}/run",
+    response_model=RobotMissionResponse,
+    status_code=201,
+)
+def run_robot_mission_schedule_now(
+    schedule_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotMissionResponse:
+    schedule = db.scalar(
+        select(RobotMissionSchedule)
+        .where(RobotMissionSchedule.id == schedule_id)
+        .options(joinedload(RobotMissionSchedule.project))
+    )
+    if schedule is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    _require_project_editor(schedule.project, current_user, db)
+
+    now = utc_now()
+    schedule.last_run_at = now
+    mission = materialize_schedule(
+        db,
+        schedule=schedule,
+        scheduled_for=now,
+        enforce_busy_policy=False,
+    )
+    if mission is None:
+        db.commit()
+        raise HTTPException(status_code=409, detail=schedule.last_error or "Schedule cannot run")
+    db.commit()
+    mission = db.scalar(
+        select(RobotMission)
+        .where(RobotMission.id == mission.id)
+        .options(joinedload(RobotMission.project), selectinload(RobotMission.steps))
+    )
+    assert mission is not None
+    return _mission_to_response(mission)
+
+
+@router.delete("/robot/mission-schedules/{schedule_id}", status_code=204)
+def delete_robot_mission_schedule(
+    schedule_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    schedule = db.scalar(
+        select(RobotMissionSchedule)
+        .where(RobotMissionSchedule.id == schedule_id)
+        .options(joinedload(RobotMissionSchedule.project))
+    )
+    if schedule is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    _require_project_editor(schedule.project, current_user, db)
+    project_id = schedule.project_id
+    schedule_name = schedule.name
+    db.delete(schedule)
+    db.commit()
+    log_activity(
+        db,
+        project_id=project_id,
+        actor=current_user,
+        action="robot_mission_schedule.delete",
+        target_type="robot_mission_schedule",
+        target_id=schedule_id,
+        metadata={"name": schedule_name},
     )
     return Response(status_code=204)
 
