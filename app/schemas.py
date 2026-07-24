@@ -423,8 +423,18 @@ class RobotMissionResponse(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     cancelled_at: datetime | None = None
+    cancel_requested_at: datetime | None = None
+    cancel_acknowledged_at: datetime | None = None
+    cancel_error: str | None = None
     steps: list[RobotMissionStepResponse] = Field(default_factory=list)
     result: dict[str, Any] | None = None
+
+
+class RobotMissionControlResponse(BaseModel):
+    mission_id: str
+    status: str
+    cancel_requested: bool
+    cancel_requested_at: datetime | None = None
 
 
 class RobotMissionStatusUpdateRequest(BaseModel):

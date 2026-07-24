@@ -21,6 +21,7 @@ from app.services.db_migrations import (
     ensure_projects_owner_name_unique,
     ensure_reports_label,
     ensure_robot_capture_points_table,
+    ensure_robot_mission_cancellation,
     ensure_robot_mission_scheduling,
     ensure_rooms_fields,
     ensure_rooms_project_name_unique,
@@ -73,6 +74,7 @@ async def lifespan(_: FastAPI):
     ensure_reports_label(engine)
     ensure_robot_capture_points_table(engine)
     ensure_robot_mission_scheduling(engine)
+    ensure_robot_mission_cancellation(engine)
     ensure_annotations_extensions(engine)
     ensure_project_activity_table(engine)
     ensure_search_trigram_indexes(engine)

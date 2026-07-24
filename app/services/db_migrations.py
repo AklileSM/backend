@@ -488,6 +488,29 @@ def ensure_robot_mission_scheduling(engine: Engine) -> None:
     logger.info("Ensured recurring robot mission schedule schema")
 
 
+def ensure_robot_mission_cancellation(engine: Engine) -> None:
+    """Add acknowledged cancellation fields to existing robot missions."""
+    inspector = inspect(engine)
+    if not inspector.has_table("robot_missions"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("robot_missions")}
+    additions = {
+        "cancel_requested_at": "TIMESTAMP",
+        "cancel_acknowledged_at": "TIMESTAMP",
+        "cancel_requested_by_user_id": (
+            "VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"
+        ),
+        "cancel_error": "TEXT",
+    }
+    with engine.begin() as conn:
+        for column, sql_type in additions.items():
+            if column not in columns:
+                conn.execute(text(
+                    f"ALTER TABLE robot_missions ADD COLUMN {column} {sql_type}"
+                ))
+    logger.info("Ensured acknowledged robot mission cancellation schema")
+
+
 def ensure_project_activity_table(engine: Engine) -> None:
     """Create the project_activity table on first deploy.
 

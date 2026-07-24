@@ -27,7 +27,14 @@ from app.models import (
 
 logger = logging.getLogger(__name__)
 
-_ACTIVE_MISSION_STATUSES = ("queued", "dispatched", "running")
+_ACTIVE_MISSION_STATUSES = (
+    "queued",
+    "dispatched",
+    "running",
+    "cancel_requested",
+    "cancelling",
+    "returning_to_start",
+)
 _ACTIVE_COMMAND_STATUSES = ("queued", "dispatched", "running")
 
 
