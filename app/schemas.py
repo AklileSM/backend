@@ -184,7 +184,7 @@ class RobotPairingClaimResponse(BaseModel):
     navigation_timeout: float = 120.0
     capture_timeout: float = 90.0
     upload_timeout: float = 600.0
-    continue_on_failure: bool = False
+    continue_on_failure: bool = True
     device: str = "/dev/video0"
     resolution: str = "2880x1440"
     input_format: str = "mjpeg"
