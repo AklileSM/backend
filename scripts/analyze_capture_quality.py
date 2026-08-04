@@ -81,7 +81,10 @@ from sqlalchemy import select  # noqa: E402
 from sqlalchemy.orm import joinedload  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
-from app.models import FileAsset, Project, Room  # noqa: E402
+from app.models import FileAsset, Project, RobotCapturePoint, Room  # noqa: E402
+
+# Below this many samples a percentile is not a threshold, it is an anecdote.
+MIN_N_FOR_SUGGESTION = 20
 
 # Metrics worth summarising, and which tail indicates a problem.
 # "low" = small values are suspect (blur), "high" = large values are (clipping).
@@ -171,6 +174,30 @@ def _summarise(values: list[float]) -> dict[str, Any]:
         "p95": round(_percentile(values, 95) or 0.0, 4),
         "max": round(max(values), 4),
     }
+
+
+def _suggest(values: list[float], bad_tail: str) -> dict[str, Any]:
+    """Percentile starting points — withheld when the sample cannot support one.
+
+    Two ways a suggestion is worse than none. Too few samples: at n=5 the 95th
+    percentile is just the second-largest value you happened to see. No variation:
+    if every capture so far has ``clipped_shadow_frac == 0``, "max ≤ 0.0" is not a
+    learned threshold, it is a promise to flag the first non-zero pixel forever.
+    In both cases say why instead of printing a number that looks like a result.
+    """
+    n = len(values)
+    if n < MIN_N_FOR_SUGGESTION:
+        return {"suggestion_note": f"withheld: n={n} < {MIN_N_FOR_SUGGESTION}"}
+    lo, hi = min(values), max(values)
+    if lo == hi:
+        return {"suggestion_note": f"withheld: no variation (all = {round(lo, 4)})"}
+
+    out: dict[str, Any] = {}
+    if bad_tail in ("low", "both"):
+        out["suggested_min_p5"] = round(_percentile(values, 5) or 0.0, 4)
+    if bad_tail in ("high", "both"):
+        out["suggested_max_p95"] = round(_percentile(values, 95) or 0.0, 4)
+    return out
 
 
 def _linear_trend(points: list[tuple[float, float]]) -> float | None:
@@ -322,6 +349,18 @@ def collect_records(
         if project is None:
             raise SystemExit(f"No project with slug '{project_slug}'")
 
+        # Captures store capture_point_id (a UUID), which is unreadable in a report
+        # and — worse — does not group with older captures of the same physical
+        # station that recorded only a target_waypoint name. RobotCapturePoint.name
+        # is unique per project, so resolving the UUID to its name both labels the
+        # station and merges the legacy rows into the same series.
+        capture_points = {
+            point.id: point
+            for point in db.scalars(
+                select(RobotCapturePoint).where(RobotCapturePoint.project_id == project.id)
+            )
+        }
+
         stmt = (
             select(FileAsset)
             .join(Room, FileAsset.room_id == Room.id)
@@ -352,16 +391,27 @@ def collect_records(
 
             # capture_point_id is the stable identity of a physical station;
             # target_waypoint is the fallback for captures predating it.
+            point_id = robot.get("capture_point_id")
+            point = capture_points.get(str(point_id)) if point_id else None
             station = (
-                robot.get("capture_point_id")
+                (point.name if point else None)
                 or robot.get("target_waypoint")
-                or asset.room.slug
+                or point_id
+                or (asset.room.slug if asset.room else None)
+                or "unknown"
             )
 
             # Raw poses are what repeatability is computed from; the scalar
             # deviation alone cannot express directional scatter.
             ax, ay, ayaw = _pose_xy_yaw(robot.get("pose"))
             cx, cy, cyaw = _pose_xy_yaw(robot.get("target_waypoint_pose"))
+            commanded_source = "metadata" if cx is not None else None
+            if cx is None and point is not None:
+                # The capture point's stored map pose is what the mission was built
+                # from, so it is a valid commanded pose for captures whose metadata
+                # predates target_waypoint_pose.
+                cx, cy, cyaw = point.map_x, point.map_y, point.yaw
+                commanded_source = "capture_point"
 
             record: dict[str, Any] = {
                 "asset_id": asset.id,
@@ -369,6 +419,8 @@ def collect_records(
                 "media_type": asset.media_type,
                 "room_slug": asset.room.slug if asset.room else None,
                 "station": str(station),
+                "station_id": str(point_id) if point_id else None,
+                "commanded_source": commanded_source,
                 "mission_id": robot.get("mission_id"),
                 "achieved_x": ax,
                 "achieved_y": ay,
@@ -441,6 +493,9 @@ def analyse(records: list[dict[str, Any]]) -> dict[str, Any]:
 
         stations.append({
             "station": station,
+            # More than one id under a single name means two capture points were
+            # named the same at different times — the series may not be one place.
+            "station_ids": sorted({r["station_id"] for r in rows if r.get("station_id")}),
             "captures": len(rows),
             "missions": len({r["mission_id"] for r in rows if r["mission_id"]}),
             "repeatability": repeat,
@@ -458,13 +513,7 @@ def analyse(records: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         summary = _summarise(values)
         # Suggested starting threshold: the 5th/95th percentile on the bad tail.
-        if bad_tail == "low":
-            summary["suggested_min_p5"] = round(_percentile(values, 5) or 0.0, 4)
-        elif bad_tail == "high":
-            summary["suggested_max_p95"] = round(_percentile(values, 95) or 0.0, 4)
-        else:
-            summary["suggested_min_p5"] = round(_percentile(values, 5) or 0.0, 4)
-            summary["suggested_max_p95"] = round(_percentile(values, 95) or 0.0, 4)
+        summary.update(_suggest(values, bad_tail))
         metrics[key] = summary
 
     flag_counts: dict[str, int] = defaultdict(int)
@@ -501,11 +550,43 @@ def analyse(records: list[dict[str, Any]]) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 def _fmt(value: Any, width: int = 9, places: int = 3) -> str:
+    """Right-align a value in ``width``, always leaving a gap to the next column.
+
+    Fixed decimals overflow on large magnitudes — ``file_bytes`` at three decimal
+    places is 14 characters wide, which used to run straight into the neighbouring
+    column and print two numbers as one. So: drop the decimals above 1000 (they are
+    noise on a byte or point count), then fall back to exponent form, and only
+    truncate as a last resort. A column is never allowed to touch its neighbour.
+    """
     if value is None:
-        return "—".rjust(width)
-    if isinstance(value, float):
-        return f"{value:.{places}f}".rjust(width)
-    return str(value).rjust(width)
+        text = "—"
+    elif isinstance(value, bool):
+        text = "yes" if value else "no"
+    elif isinstance(value, float):
+        if not math.isfinite(value):
+            text = "n/a"
+        elif abs(value) >= 1000:
+            text = f"{value:.0f}"
+        else:
+            text = f"{value:.{places}f}"
+    else:
+        text = str(value)
+
+    if len(text) < width:
+        return text.rjust(width)
+    for fallback in ("{:.2e}", "{:.1e}", "{:.0e}"):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            candidate = fallback.format(float(value))
+            if len(candidate) < width:
+                return candidate.rjust(width)
+    return text[: max(1, width - 2)] + "… "
+
+
+def _trunc(text: str, width: int) -> str:
+    """Left-align in ``width`` with a visible marker when the name was cut."""
+    if len(text) <= width - 1:
+        return text.ljust(width)
+    return (text[: width - 2] + "…").ljust(width)
 
 
 def print_report(report: dict[str, Any]) -> None:
@@ -536,7 +617,7 @@ def print_report(report: dict[str, Any]) -> None:
           f"{'rms2d':>8}{'yaw_sd':>8}{'bias':>8}{'drift/day':>11}{'unloc':>6}")
     for s in report["stations"]:
         rp, yaw = s["repeatability"], s["yaw"]
-        print(f"  {s['station'][:21]:<22}{s['captures']:>4}{s['missions']:>5}"
+        print(f"  {_trunc(s['station'], 22)}{s['captures']:>4}{s['missions']:>5}"
               f"{_fmt(rp.get('cep50'), 8)}{_fmt(rp.get('cep95'), 8)}"
               f"{_fmt(rp.get('max_pairwise_separation_m'), 8)}{_fmt(rp.get('rms_2d'), 8)}"
               f"{_fmt(yaw.get('circular_stdev_deg'), 8, 2)}{_fmt(rp.get('bias_m'), 8)}"
@@ -544,6 +625,11 @@ def print_report(report: dict[str, Any]) -> None:
     print("  CEP50/CEP95 = median / 95th-pct radial distance from the station's own")
     print("  centroid. maxsep = furthest any two visits sat apart. bias = centroid")
     print("  offset from commanded (accuracy). yaw_sd = circular stdev, degrees.")
+
+    ambiguous = [s["station"] for s in report["stations"] if len(s.get("station_ids") or []) > 1]
+    if ambiguous:
+        print(f"\n  WARNING: {len(ambiguous)} station name(s) cover more than one capture-point")
+        print(f"  id, so their series may not be a single physical place: {', '.join(ambiguous[:6])}")
 
     thin = [s["station"] for s in report["stations"] if s["captures"] < 5]
     if thin:
@@ -553,15 +639,17 @@ def print_report(report: dict[str, Any]) -> None:
 
     if report["metrics"]:
         print("\n=== Quality metric distributions ===")
-        print(f"  {'metric':<26}{'n':>6}{'median':>12}{'p95':>12}{'min':>12}{'max':>12}   suggestion")
+        print(f"  {'metric':<26}{'n':>6}{'median':>13}{'p95':>13}{'min':>13}{'max':>13}   suggestion")
         for key, m in report["metrics"].items():
-            suggestion = ""
+            parts = []
             if "suggested_min_p5" in m:
-                suggestion += f"min≥{m['suggested_min_p5']} "
+                parts.append(f"min≥{m['suggested_min_p5']}")
             if "suggested_max_p95" in m:
-                suggestion += f"max≤{m['suggested_max_p95']}"
-            print(f"  {key:<26}{m['n']:>6}{_fmt(m['median'], 12)}{_fmt(m['p95'], 12)}"
-                  f"{_fmt(m['min'], 12)}{_fmt(m['max'], 12)}   {suggestion}")
+                parts.append(f"max≤{m['suggested_max_p95']}")
+            if "suggestion_note" in m:
+                parts.append(m["suggestion_note"])
+            print(f"  {_trunc(key, 26)}{m['n']:>6}{_fmt(m['median'], 13)}{_fmt(m['p95'], 13)}"
+                  f"{_fmt(m['min'], 13)}{_fmt(m['max'], 13)}   {'  '.join(parts)}")
 
     if report["advisory_flag_counts"]:
         print("\n=== Advisory flags raised (PROVISIONAL thresholds) ===")
