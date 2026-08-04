@@ -11,6 +11,7 @@ from app.api.robot_missions import (
     cancel_robot_mission,
     get_robot_mission_control,
     post_robot_mission_status,
+    stop_robot_mission_return,
 )
 from app.database import Base
 from app.models import Project, RobotMission, RobotMissionStep, User
@@ -79,6 +80,30 @@ class RobotCancellationTests(unittest.TestCase):
             )
             self.assertEqual(returning.status, "returning_to_start")
 
+            stopping = stop_robot_mission_return(
+                mission.id,
+                current_user=operator,
+                db=db,
+            )
+            self.assertEqual(stopping.status, "stop_requested")
+
+            control = get_robot_mission_control(
+                robot.username,
+                mission.id,
+                current_user=robot,
+                db=db,
+            )
+            self.assertTrue(control.cancel_requested)
+            self.assertTrue(control.stop_requested)
+
+            stale_returning = post_robot_mission_status(
+                mission.id,
+                RobotMissionStatusUpdateRequest(status="returning_to_start"),
+                current_user=robot,
+                db=db,
+            )
+            self.assertEqual(stale_returning.status, "stop_requested")
+
             cancelled = post_robot_mission_status(
                 mission.id,
                 RobotMissionStatusUpdateRequest(
@@ -86,7 +111,7 @@ class RobotCancellationTests(unittest.TestCase):
                     result={
                         "status": "CANCELLED",
                         "steps": [{"waypoint_index": 1, "status": "CANCELLED"}],
-                        "return_to_start": {"status": "SUCCEEDED"},
+                        "return_to_start": {"status": "CANCELLED"},
                     },
                 ),
                 current_user=robot,

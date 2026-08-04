@@ -1045,7 +1045,12 @@ def cancel_robot_mission(
 
     if mission.status in ("succeeded", "failed", "cancelled", "cancel_failed"):
         return _mission_to_response(mission)
-    if mission.status in ("cancel_requested", "cancelling", "returning_to_start"):
+    if mission.status in (
+        "cancel_requested",
+        "cancelling",
+        "returning_to_start",
+        "stop_requested",
+    ):
         return _mission_to_response(mission)
 
     now = _utc_now()
@@ -1080,6 +1085,52 @@ def cancel_robot_mission(
             if mission.status == "cancelled"
             else "robot_mission.cancel_request"
         ),
+        target_type="robot_mission",
+        target_id=mission.id,
+        metadata={
+            "robot_id": mission.robot_username,
+            "capture_mode": mission.capture_mode,
+            "waypoint_count": len(mission.waypoints_json or []),
+        },
+    )
+    return _mission_to_response(mission)
+
+
+@router.post("/robot/missions/{mission_id}/stop", response_model=RobotMissionResponse)
+def stop_robot_mission_return(
+    mission_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotMissionResponse:
+    """Cancel the return-to-start goal without treating it as a robot failure."""
+    mission = db.scalar(
+        select(RobotMission)
+        .where(RobotMission.id == mission_id)
+        .options(joinedload(RobotMission.project), selectinload(RobotMission.steps))
+    )
+    if mission is None:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    _require_project_editor(mission.project, current_user, db)
+
+    if mission.status in ("succeeded", "failed", "cancelled", "cancel_failed"):
+        return _mission_to_response(mission)
+    if mission.status == "stop_requested":
+        return _mission_to_response(mission)
+    if mission.status != "returning_to_start":
+        raise HTTPException(
+            status_code=409,
+            detail="The robot can only be stopped here while it is returning to start",
+        )
+
+    mission.status = "stop_requested"
+    db.commit()
+    db.refresh(mission)
+
+    log_activity(
+        db,
+        project_id=mission.project_id,
+        actor=current_user,
+        action="robot_mission.stop_request",
         target_type="robot_mission",
         target_id=mission.id,
         metadata={
@@ -1515,7 +1566,9 @@ def get_robot_mission_control(
             "cancel_requested",
             "cancelling",
             "returning_to_start",
+            "stop_requested",
         ),
+        stop_requested=mission.status == "stop_requested",
         cancel_requested_at=mission.cancel_requested_at,
     )
 
@@ -1542,6 +1595,7 @@ def post_robot_mission_status(
         "cancel_requested",
         "cancelling",
         "returning_to_start",
+        "stop_requested",
         "cancelled",
         "cancel_failed",
     )
@@ -1549,6 +1603,17 @@ def post_robot_mission_status(
     # Terminal states are sticky. In particular, a late success from work that
     # was already in flight must never revive an acknowledged cancellation.
     if mission.status in terminal_statuses:
+        return _mission_to_response(mission)
+
+    # Once an operator asks to stop the return journey, an in-flight status
+    # update must not put the mission back into "returning_to_start". Only the
+    # robot's terminal acknowledgement may advance this state.
+    if mission.status == "stop_requested" and payload.status not in terminal_statuses:
+        if payload.result is not None:
+            mission.result_json = payload.result
+            _apply_step_results(mission, payload.result)
+        db.commit()
+        db.refresh(mission)
         return _mission_to_response(mission)
 
     cancellation_in_progress = mission.status in cancellation_statuses

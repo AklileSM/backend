@@ -434,6 +434,7 @@ class RobotMissionControlResponse(BaseModel):
     mission_id: str
     status: str
     cancel_requested: bool
+    stop_requested: bool
     cancel_requested_at: datetime | None = None
 
 

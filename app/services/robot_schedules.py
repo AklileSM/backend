@@ -34,6 +34,7 @@ _ACTIVE_MISSION_STATUSES = (
     "cancel_requested",
     "cancelling",
     "returning_to_start",
+    "stop_requested",
 )
 _ACTIVE_COMMAND_STATUSES = ("queued", "dispatched", "running")
 
