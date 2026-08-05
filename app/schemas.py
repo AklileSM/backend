@@ -36,6 +36,12 @@ class FileAssetDetailsResponse(BaseModel):
     can_delete: bool = False
 
 
+class QualityExportEstimateResponse(BaseModel):
+    asset_count: int
+    row_count: int
+    filename: str
+
+
 class MyUploadItemResponse(BaseModel):
     """File asset uploaded by the current user (see metadata_json.uploaded_by_user_id)."""
 
