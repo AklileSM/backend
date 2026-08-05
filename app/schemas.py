@@ -16,6 +16,26 @@ class MediaFileResponse(BaseModel):
     conversion_error: str | None = None
 
 
+class FileAssetDetailsResponse(BaseModel):
+    id: str
+    room_id: str
+    room_name: str
+    room_slug: str
+    project_id: str
+    project_name: str
+    project_slug: str
+    media_type: str
+    display_name: str
+    original_name: str
+    capture_date: date
+    content_type: str | None = None
+    file_size: int | None = None
+    sha256_hash: str | None = None
+    created_at: datetime
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    can_delete: bool = False
+
+
 class MyUploadItemResponse(BaseModel):
     """File asset uploaded by the current user (see metadata_json.uploaded_by_user_id)."""
 
@@ -183,6 +203,8 @@ class RobotPairingClaimResponse(BaseModel):
     ros2_bin: str = "ros2"
     navigation_timeout: float = 120.0
     capture_timeout: float = 90.0
+    quality_gate_mode: str = "observe"
+    quality_gate_max_attempts: int = 3
     upload_timeout: float = 600.0
     continue_on_failure: bool = True
     device: str = "/dev/video0"

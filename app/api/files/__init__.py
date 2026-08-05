@@ -6,6 +6,8 @@ concern:
 * `explorer.py`   — by-date / by-room / dates-summary endpoints plus
                     `/my-uploads` and `/search`. The user-facing listing
                     surface.
+* `details.py`    — membership-gated, on-demand file and capture metadata for
+                    the explorer's asset-details modal.
 * `serve.py`      — proxy-streaming of file bytes from MinIO: `/url`,
                     `/thumbnail`, `/content`, and the Potree
                     `/pointcloud/{path}` route. HTTP Range requests and
@@ -26,7 +28,7 @@ covering every endpoint that used to live in the old file.
 
 from fastapi import APIRouter
 
-from . import explorer, mutations, pointcloud, serve
+from . import details, explorer, mutations, pointcloud, serve
 
 # Splice route lists onto a single composed router. `include_router` cannot
 # be used here because some original routes use `path=""` paired with `"/"`
@@ -35,7 +37,7 @@ from . import explorer, mutations, pointcloud, serve
 # the splice pattern consistent with `app/api/reports/__init__.py` so any
 # future `""` path doesn't break the package.)
 router = APIRouter()
-for _sub in (explorer.router, serve.router, mutations.router, pointcloud.router):
+for _sub in (explorer.router, details.router, serve.router, mutations.router, pointcloud.router):
     router.routes.extend(_sub.routes)
 
 __all__ = ["router"]
