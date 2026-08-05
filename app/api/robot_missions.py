@@ -1142,6 +1142,104 @@ def stop_robot_mission_return(
     return _mission_to_response(mission)
 
 
+@router.post("/robot/missions/{mission_id}/force-close", response_model=RobotMissionResponse)
+def force_close_robot_mission(
+    mission_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotMissionResponse:
+    """Close a stale cancellation when no robot agent is online to acknowledge it."""
+    mission = db.scalar(
+        select(RobotMission)
+        .where(RobotMission.id == mission_id)
+        .options(joinedload(RobotMission.project), selectinload(RobotMission.steps))
+    )
+    if mission is None:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    _require_project_editor(mission.project, current_user, db)
+
+    terminal_statuses = ("succeeded", "failed", "cancelled", "cancel_failed")
+    if mission.status in terminal_statuses:
+        return _mission_to_response(mission)
+    if mission.status not in (
+        "cancel_requested",
+        "cancelling",
+        "returning_to_start",
+        "stop_requested",
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Only a mission already being cancelled can be force-closed",
+        )
+
+    previous_status = mission.status
+    now = _utc_now()
+    result = dict(mission.result_json or {})
+    progress_events = list(result.get("progress_events") or [])
+    progress_events.append(
+        {
+            "id": "task:force_closed",
+            "phase": "task_cancelled",
+            "label": "Task closed without robot confirmation",
+            "status": "cancelled",
+            "detail": "Force-closed by the operator while the robot agent was unavailable",
+            "completed_at_utc": now.replace(tzinfo=timezone.utc).isoformat(),
+        }
+    )
+    result.update(
+        {
+            "mission_id": mission.id,
+            "status": "CANCELLED",
+            "steps": list(result.get("steps") or []),
+            "return_to_start": {
+                "status": "CANCELLED" if previous_status == "stop_requested" else "UNCONFIRMED",
+                "navigation_result": "FORCE_CLOSED_BY_OPERATOR",
+                "target_waypoint": "__return_to_start__",
+                "room_slug": None,
+            },
+            "progress_events": progress_events,
+            "force_closed": True,
+            "force_closed_from_status": previous_status,
+        }
+    )
+
+    mission.status = "cancelled"
+    mission.result_json = result
+    mission.cancel_requested_at = mission.cancel_requested_at or now
+    mission.cancel_requested_by_user_id = current_user.id
+    mission.cancel_acknowledged_at = now
+    mission.cancelled_at = now
+    mission.completed_at = now
+    mission.cancel_error = None
+    for step in mission.steps:
+        if step.status not in ("succeeded", "failed", "cancelled"):
+            step.status = "cancelled"
+            step.completed_at = now
+
+    presence = db.scalar(
+        select(RobotPresence).where(RobotPresence.robot_user_id == mission.robot_user_id)
+    )
+    if presence and presence.current_mission_id == mission.id:
+        presence.current_mission_id = None
+        presence.status = "idle"
+
+    db.commit()
+    db.refresh(mission)
+    log_activity(
+        db,
+        project_id=mission.project_id,
+        actor=current_user,
+        action="robot_mission.force_close",
+        target_type="robot_mission",
+        target_id=mission.id,
+        metadata={
+            "robot_id": mission.robot_username,
+            "previous_status": previous_status,
+        },
+    )
+    return _mission_to_response(mission)
+
+
 @router.delete("/robot/missions/{mission_id}", status_code=200)
 def delete_robot_mission(
     mission_id: str,

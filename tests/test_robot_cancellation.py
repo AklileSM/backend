@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.robot_missions import (
     cancel_robot_mission,
+    force_close_robot_mission,
     get_robot_mission_control,
     post_robot_mission_status,
     stop_robot_mission_return,
@@ -103,6 +104,18 @@ class RobotCancellationTests(unittest.TestCase):
                 db=db,
             )
             self.assertEqual(stale_returning.status, "stop_requested")
+
+            force_closed = force_close_robot_mission(
+                mission.id,
+                current_user=operator,
+                db=db,
+            )
+            self.assertEqual(force_closed.status, "cancelled")
+            self.assertTrue(force_closed.result["force_closed"])
+            self.assertEqual(
+                force_closed.result["return_to_start"]["navigation_result"],
+                "FORCE_CLOSED_BY_OPERATOR",
+            )
 
             cancelled = post_robot_mission_status(
                 mission.id,
