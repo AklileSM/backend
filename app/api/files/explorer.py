@@ -9,7 +9,7 @@
                           highlighter.
 * `/explorer/date/{d}`  — all files captured on a single date, grouped by
                           room name.
-* `/explorer/room/{slug}` — all files in a single room, grouped by date.
+* `/explorer/room/{slug}` — all files in a project-scoped room, grouped by date.
 
 All routes are auth-gated except `/my-uploads` and `/search`, which are
 gated by project membership (admins bypass).
@@ -217,8 +217,25 @@ def explorer_by_date(capture_date: date, db: Session = Depends(get_db)) -> Explo
 
 
 @router.get("/explorer/room/{room_slug}", response_model=ExplorerByRoomResponse)
-def explorer_by_room(room_slug: str, db: Session = Depends(get_db)) -> ExplorerByRoomResponse:
-    room = db.scalar(select(Room).where(Room.slug == room_slug))
+def explorer_by_room(
+    room_slug: str,
+    project_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> ExplorerByRoomResponse:
+    room_stmt = select(Room).where(Room.slug == room_slug)
+    if project_id:
+        room = db.scalar(room_stmt.where(Room.project_id == project_id))
+    else:
+        # Legacy callers did not send project context. Continue to support a
+        # globally unique slug, but never silently select the first row when
+        # multiple projects use the same room slug.
+        matches = db.scalars(room_stmt.limit(2)).all()
+        if len(matches) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="project_id is required when a room slug exists in multiple projects",
+            )
+        room = matches[0] if matches else None
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
 
