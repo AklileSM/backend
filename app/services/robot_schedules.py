@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models import (
+    ProjectMember,
     RobotCapturePoint,
     RobotCommand,
     RobotMission,
@@ -49,6 +50,22 @@ def validate_timezone(timezone_name: str) -> None:
         ZoneInfo(timezone_name)
     except ZoneInfoNotFoundError as exc:
         raise ValueError(f"Unknown timezone: {timezone_name}") from exc
+
+
+def robot_can_upload_to_project(
+    db: Session,
+    *,
+    robot_user_id: str,
+    project_id: str,
+) -> bool:
+    """Return whether the robot account can persist captures for this project."""
+    role = db.scalar(
+        select(ProjectMember.role).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == robot_user_id,
+        )
+    )
+    return role in ("owner", "editor")
 
 
 def next_schedule_run(
@@ -189,6 +206,22 @@ def materialize_schedule(
     enforce_busy_policy: bool = True,
 ) -> RobotMission | None:
     """Create the immutable one-shot mission for one schedule occurrence."""
+    if not robot_can_upload_to_project(
+        db,
+        robot_user_id=schedule.robot_user_id,
+        project_id=schedule.project_id,
+    ):
+        # Do not repeatedly dispatch a task whose captures are guaranteed to be
+        # rejected with 403. Re-enabling after pairing/editing membership is an
+        # explicit operator action and gives the configuration another check.
+        schedule.enabled = False
+        schedule.next_run_at = None
+        schedule.last_outcome = "invalid"
+        schedule.last_error = (
+            f"Robot {schedule.robot_username} is not an owner or editor of this project"
+        )
+        return None
+
     if (
         enforce_busy_policy
         and schedule.busy_policy == "skip"

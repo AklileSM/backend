@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.database import Base
 from app.models import (
     Project,
+    ProjectMember,
     RobotCapturePoint,
     RobotCommand,
     RobotMissionSchedule,
@@ -50,6 +51,7 @@ class RobotScheduleTests(unittest.TestCase):
             project = Project(name="Demo", slug="demo")
             db.add_all([operator, robot, project])
             db.flush()
+            db.add(ProjectMember(project_id=project.id, user_id=robot.id, role="editor"))
 
             room1 = RobotCapturePoint(
                 project_id=project.id,
@@ -109,6 +111,47 @@ class RobotScheduleTests(unittest.TestCase):
             command = db.scalar(select(RobotCommand))
             self.assertIsNotNone(command)
             self.assertEqual(command.kind, "connect")
+
+    def test_materialize_disables_schedule_when_robot_lost_project_access(self) -> None:
+        with Session(self.engine) as db:
+            operator = User(username="operator", password_hash="x", is_admin=True)
+            robot = User(username="robot-1", password_hash="x", is_robot=True)
+            project = Project(name="Demo", slug="demo")
+            db.add_all([operator, robot, project])
+            db.flush()
+            schedule = RobotMissionSchedule(
+                name="Daily 5 PM",
+                robot_user_id=robot.id,
+                robot_username=robot.username,
+                project_id=project.id,
+                requested_by_user_id=operator.id,
+                enabled=True,
+                timezone="Asia/Dubai",
+                local_time="17:00",
+                weekdays_json=list(range(7)),
+                capture_point_ids_json=[],
+                capture_mode="panorama",
+                retry_policy_json={},
+                robot_meta_json={},
+                busy_policy="skip",
+                auto_connect=True,
+                max_lateness_minutes=30,
+                next_run_at=datetime(2026, 8, 13, 13, 0),
+            )
+            db.add(schedule)
+            db.flush()
+
+            mission = materialize_schedule(
+                db,
+                schedule=schedule,
+                scheduled_for=datetime(2026, 8, 13, 13, 0),
+            )
+
+            self.assertIsNone(mission)
+            self.assertFalse(schedule.enabled)
+            self.assertIsNone(schedule.next_run_at)
+            self.assertEqual(schedule.last_outcome, "invalid")
+            self.assertIn("not an owner or editor", schedule.last_error)
 
 
 if __name__ == "__main__":

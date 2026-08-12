@@ -35,6 +35,7 @@ from app.services.db_migrations import (
     ensure_users_role_dropped,
 )
 from app.services.pointcloud import init_converter_pool, reset_interrupted_conversions, shutdown_converter_pool
+from app.services.robot_mission_watchdog import run_mission_cancellation_watchdog
 from app.services.robot_schedules import run_schedule_dispatcher
 from app.services.storage import storage_service
 
@@ -89,11 +90,14 @@ async def lifespan(_: FastAPI):
     schedule_dispatcher_task = asyncio.create_task(
         run_schedule_dispatcher(stop_event=schedule_dispatcher_stop)
     )
+    cancellation_watchdog_task = asyncio.create_task(
+        run_mission_cancellation_watchdog(stop_event=schedule_dispatcher_stop)
+    )
     try:
         yield
     finally:
         schedule_dispatcher_stop.set()
-        await schedule_dispatcher_task
+        await asyncio.gather(schedule_dispatcher_task, cancellation_watchdog_task)
         shutdown_converter_pool()
 
 

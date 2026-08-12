@@ -53,6 +53,7 @@ from app.services.robot_schedules import (
     materialize_schedule,
     next_schedule_run,
     ordered_capture_points,
+    robot_can_upload_to_project,
     utc_now,
     validate_timezone,
 )
@@ -106,6 +107,22 @@ def _require_project_editor(project: Project, user: User, db: Session) -> None:
             status_code=403,
             detail="Only project owners and editors can manage robot missions",
         )
+
+
+def _require_robot_project_upload_access(project: Project, robot: User, db: Session) -> None:
+    if robot_can_upload_to_project(
+        db,
+        robot_user_id=robot.id,
+        project_id=project.id,
+    ):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"Robot {robot.username} cannot upload to this project. "
+            "Add the robot as an editor or pair it with this project before starting a mission."
+        ),
+    )
 
 
 def _require_project_access(project: Project, user: User, db: Session) -> None:
@@ -660,6 +677,7 @@ def create_robot_mission_schedule(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     _require_project_editor(project, current_user, db)
+    _require_robot_project_upload_access(project, robot, db)
     _validate_schedule_configuration(
         db,
         project=project,
@@ -754,6 +772,10 @@ def update_robot_mission_schedule(
         robot = _resolve_robot_user(payload.robot_id, db)
         schedule.robot_user_id = robot.id
         schedule.robot_username = robot.username
+    else:
+        robot = _resolve_robot_user(schedule.robot_user_id, db)
+
+    _require_robot_project_upload_access(project, robot, db)
 
     capture_point_ids = (
         list(payload.capture_point_ids)
@@ -843,6 +865,8 @@ def run_robot_mission_schedule_now(
     if schedule is None:
         raise HTTPException(status_code=404, detail="Schedule not found")
     _require_project_editor(schedule.project, current_user, db)
+    robot = _resolve_robot_user(schedule.robot_user_id, db)
+    _require_robot_project_upload_access(schedule.project, robot, db)
 
     now = utc_now()
     schedule.last_run_at = now
@@ -945,6 +969,7 @@ def create_robot_mission(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     _require_project_editor(project, current_user, db)
+    _require_robot_project_upload_access(project, robot, db)
     resolved_waypoints, room_slug_map, robot_meta = _resolve_mission_waypoints(
         payload=payload,
         project=project,
@@ -1308,9 +1333,10 @@ def post_robot_heartbeat(
     presence_payload = _presence_payload(presence)
     presence_payload["heartbeat"] = payload.model_dump(mode="json")
     presence.payload_json = presence_payload
-    presence.last_seen_at = (
-        payload.reported_at_utc.replace(tzinfo=None) if payload.reported_at_utc else _utc_now()
-    )
+    # Liveness is measured by when this server received the heartbeat. Robot
+    # clocks can drift or be reset, so a client-supplied timestamp must not be
+    # able to keep an offline robot looking alive indefinitely.
+    presence.last_seen_at = _utc_now()
 
     db.commit()
     db.refresh(presence)
@@ -1657,6 +1683,7 @@ def get_robot_mission_control(
     )
     if mission is None:
         raise HTTPException(status_code=404, detail="Mission not found")
+    result = dict(mission.result_json or {})
     return RobotMissionControlResponse(
         mission_id=mission.id,
         status=mission.status,
@@ -1667,6 +1694,14 @@ def get_robot_mission_control(
             "stop_requested",
         ),
         stop_requested=mission.status == "stop_requested",
+        # If the backend gave up waiting because the robot was unreachable,
+        # tell a still-running old agent to stop its work as soon as the link
+        # returns. The mission remains failed because return was not confirmed.
+        abort_requested=(
+            mission.status == "failed"
+            and result.get("failure_code")
+            == "ROBOT_UNREACHABLE_DURING_CANCELLATION"
+        ),
         cancel_requested_at=mission.cancel_requested_at,
     )
 
@@ -1715,35 +1750,60 @@ def post_robot_mission_status(
         return _mission_to_response(mission)
 
     cancellation_in_progress = mission.status in cancellation_statuses
-    if cancellation_in_progress and payload.status not in cancellation_statuses:
+    effective_status = payload.status
+    if cancellation_in_progress and payload.status == "succeeded":
+        # The cancel request won a race with the robot's final success. Work may
+        # already have completed, but it must not revive the task as succeeded.
+        effective_status = "cancelled"
+    elif cancellation_in_progress and payload.status not in cancellation_statuses:
         # Progress payloads can still enrich the timeline while cancellation is
         # being processed, but they cannot downgrade the mission back to running.
-        if payload.result is not None:
-            mission.result_json = payload.result
-            _apply_step_results(mission, payload.result)
-        db.commit()
-        db.refresh(mission)
-        return _mission_to_response(mission)
+        # A final failure proves that the runner stopped, but it does not by
+        # itself prove that cancellation returned the robot to start. Only close
+        # as cancelled when the robot result confirms that return. Otherwise use
+        # cancel_failed so the UI never implies that the robot is safely home.
+        if payload.status == "failed":
+            return_result = (
+                payload.result.get("return_to_start")
+                if isinstance(payload.result, dict)
+                else None
+            )
+            return_status = (
+                str(return_result.get("status") or "").upper()
+                if isinstance(return_result, dict)
+                else ""
+            )
+            return_confirmed = return_status == "SUCCEEDED" or (
+                mission.status == "stop_requested" and return_status == "CANCELLED"
+            )
+            effective_status = "cancelled" if return_confirmed else "cancel_failed"
+        else:
+            if payload.result is not None:
+                mission.result_json = payload.result
+                _apply_step_results(mission, payload.result)
+            db.commit()
+            db.refresh(mission)
+            return _mission_to_response(mission)
 
-    mission.status = payload.status
+    mission.status = effective_status
     if payload.started_at_utc and mission.started_at is None:
         mission.started_at = payload.started_at_utc.replace(tzinfo=None)
     if payload.completed_at_utc:
         mission.completed_at = payload.completed_at_utc.replace(tzinfo=None)
-    elif payload.status in terminal_statuses:
+    elif effective_status in terminal_statuses:
         mission.completed_at = _utc_now()
-    if payload.status == "running":
+    if effective_status == "running":
         mission.started_at = mission.started_at or payload.started_at_utc or _utc_now()
-    if payload.status == "cancelled":
+    if effective_status == "cancelled":
         mission.cancelled_at = mission.completed_at or _utc_now()
         mission.cancel_acknowledged_at = mission.cancelled_at
         mission.cancel_error = None
-    elif payload.status == "cancel_failed":
+    elif effective_status == "cancel_failed":
         mission.cancel_acknowledged_at = mission.completed_at or _utc_now()
     if payload.result is not None:
         mission.result_json = payload.result
         _apply_step_results(mission, payload.result)
-        if payload.status == "cancel_failed":
+        if effective_status == "cancel_failed":
             return_result = payload.result.get("return_to_start")
             mission.cancel_error = (
                 str(return_result.get("error"))
@@ -1751,14 +1811,14 @@ def post_robot_mission_status(
                 else str(payload.result.get("error") or "Return to start failed")
             )
 
-    if payload.status in ("cancelled", "cancel_failed"):
+    if effective_status in ("cancelled", "cancel_failed"):
         completed = mission.completed_at or _utc_now()
         for step in mission.steps:
             if step.status not in ("succeeded", "failed", "cancelled"):
                 step.status = "cancelled"
                 step.completed_at = completed
 
-    if payload.status in terminal_statuses:
+    if effective_status in terminal_statuses:
         presence = db.scalar(
             select(RobotPresence).where(RobotPresence.robot_user_id == mission.robot_user_id)
         )

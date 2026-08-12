@@ -42,6 +42,12 @@ class QualityExportEstimateResponse(BaseModel):
     filename: str
 
 
+class MissionSummaryEstimateResponse(BaseModel):
+    mission_count: int
+    waypoint_count: int
+    filename: str
+
+
 class MyUploadItemResponse(BaseModel):
     """File asset uploaded by the current user (see metadata_json.uploaded_by_user_id)."""
 
@@ -463,6 +469,7 @@ class RobotMissionControlResponse(BaseModel):
     status: str
     cancel_requested: bool
     stop_requested: bool
+    abort_requested: bool = False
     cancel_requested_at: datetime | None = None
 
 
