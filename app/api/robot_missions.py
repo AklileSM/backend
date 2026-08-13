@@ -343,12 +343,25 @@ def _presence_to_response(presence: RobotPresence) -> RobotPresenceResponse:
         status=presence.status,
         current_mission_id=presence.current_mission_id,
         hostname=presence.hostname,
+        home_pose=_home_pose_from_presence(presence),
         last_seen_at=presence.last_seen_at,
     )
 
 
 def _presence_payload(presence: RobotPresence) -> dict:
     return dict(presence.payload_json or {}) if isinstance(presence.payload_json, dict) else {}
+
+
+def _home_pose_from_presence(presence: RobotPresence) -> dict | None:
+    payload = _presence_payload(presence)
+    home_pose = payload.get("home_pose")
+    if isinstance(home_pose, dict):
+        return home_pose
+    heartbeat = payload.get("heartbeat")
+    if not isinstance(heartbeat, dict):
+        return None
+    home_pose = heartbeat.get("home_pose")
+    return home_pose if isinstance(home_pose, dict) else None
 
 
 def _telemetry_to_response(presence: RobotPresence) -> RobotTelemetryResponse:
@@ -412,6 +425,7 @@ def _robot_to_summary(robot: User, presence: RobotPresence | None) -> RobotSumma
         status=presence.status if presence else None,
         current_mission_id=presence.current_mission_id if presence else None,
         hostname=presence.hostname if presence else None,
+        home_pose=_home_pose_from_presence(presence) if presence else None,
         last_seen_at=presence.last_seen_at if presence else None,
     )
 
@@ -1331,6 +1345,19 @@ def post_robot_heartbeat(
     presence.current_mission_id = payload.current_mission_id
     presence.hostname = payload.hostname
     presence_payload = _presence_payload(presence)
+    # Home is durable state, not liveness state. Preserve the last valid pose when a
+    # robot temporarily starts without one configured or an older agent sends no value.
+    if payload.home_pose is not None:
+        presence_payload["home_pose"] = payload.home_pose.model_dump(mode="json")
+    elif not isinstance(presence_payload.get("home_pose"), dict):
+        previous_heartbeat = presence_payload.get("heartbeat")
+        previous_home = (
+            previous_heartbeat.get("home_pose")
+            if isinstance(previous_heartbeat, dict)
+            else None
+        )
+        if isinstance(previous_home, dict):
+            presence_payload["home_pose"] = previous_home
     presence_payload["heartbeat"] = payload.model_dump(mode="json")
     presence.payload_json = presence_payload
     # Liveness is measured by when this server received the heartbeat. Robot
