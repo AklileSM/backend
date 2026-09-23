@@ -227,24 +227,16 @@ class RobotPairingClaimResponse(BaseModel):
     sdk_capture_cmd: str | None = "/home/unitree/SiteScope/robot/sitescope_capture_still --output {output_path}"
 
 
-class RobotHomePose(BaseModel):
-    x: float
-    y: float
-    z: float = 0.0
-    qx: float = 0.0
-    qy: float = 0.0
-    qz: float = 0.0
-    qw: float = 1.0
-    frame: str = "map"
-
-
 class RobotHeartbeatRequest(BaseModel):
     robot_id: str
     status: str = Field(min_length=1, max_length=32)
     current_mission_id: str | None = None
     hostname: str | None = None
+    connection: str | None = Field(
+        default=None,
+        pattern=r"^(disconnected|connecting|connected|disconnecting)$",
+    )
     reported_at_utc: datetime | None = None
-    home_pose: RobotHomePose | None = None
 
 
 class RobotPresenceResponse(BaseModel):
@@ -252,7 +244,7 @@ class RobotPresenceResponse(BaseModel):
     status: str
     current_mission_id: str | None = None
     hostname: str | None = None
-    home_pose: RobotHomePose | None = None
+    connection: str | None = None
     last_seen_at: datetime
 
 
@@ -295,7 +287,7 @@ class RobotSummaryResponse(BaseModel):
     status: str | None = None
     current_mission_id: str | None = None
     hostname: str | None = None
-    home_pose: RobotHomePose | None = None
+    connection: str | None = None
     last_seen_at: datetime | None = None
 
 

@@ -343,7 +343,7 @@ def _presence_to_response(presence: RobotPresence) -> RobotPresenceResponse:
         status=presence.status,
         current_mission_id=presence.current_mission_id,
         hostname=presence.hostname,
-        home_pose=_home_pose_from_presence(presence),
+        connection=_presence_connection(presence),
         last_seen_at=presence.last_seen_at,
     )
 
@@ -352,16 +352,44 @@ def _presence_payload(presence: RobotPresence) -> dict:
     return dict(presence.payload_json or {}) if isinstance(presence.payload_json, dict) else {}
 
 
-def _home_pose_from_presence(presence: RobotPresence) -> dict | None:
-    payload = _presence_payload(presence)
-    home_pose = payload.get("home_pose")
-    if isinstance(home_pose, dict):
-        return home_pose
-    heartbeat = payload.get("heartbeat")
+def _presence_connection(presence: RobotPresence) -> str | None:
+    heartbeat = _presence_payload(presence).get("heartbeat")
     if not isinstance(heartbeat, dict):
         return None
-    home_pose = heartbeat.get("home_pose")
-    return home_pose if isinstance(home_pose, dict) else None
+    connection = heartbeat.get("connection")
+    if connection in {"disconnected", "connecting", "connected", "disconnecting"}:
+        return str(connection)
+    return None
+
+
+def _record_robot_connection(
+    *,
+    robot_user_id: str,
+    robot_username: str,
+    connection: str | None,
+    db: Session,
+) -> bool:
+    """Record physical stack state independently from lifecycle-command history."""
+    if connection not in {"disconnected", "connecting", "connected", "disconnecting"}:
+        return False
+    presence = db.scalar(
+        select(RobotPresence).where(RobotPresence.robot_user_id == robot_user_id)
+    )
+    if presence is None:
+        presence = RobotPresence(
+            robot_user_id=robot_user_id,
+            robot_username=robot_username,
+        )
+        db.add(presence)
+    presence_payload = _presence_payload(presence)
+    heartbeat = presence_payload.get("heartbeat")
+    heartbeat = dict(heartbeat) if isinstance(heartbeat, dict) else {}
+    heartbeat["connection"] = connection
+    presence_payload["heartbeat"] = heartbeat
+    presence.payload_json = presence_payload
+    # This update is authenticated as the robot and therefore also proves liveness.
+    presence.last_seen_at = _utc_now()
+    return True
 
 
 def _telemetry_to_response(presence: RobotPresence) -> RobotTelemetryResponse:
@@ -425,7 +453,7 @@ def _robot_to_summary(robot: User, presence: RobotPresence | None) -> RobotSumma
         status=presence.status if presence else None,
         current_mission_id=presence.current_mission_id if presence else None,
         hostname=presence.hostname if presence else None,
-        home_pose=_home_pose_from_presence(presence) if presence else None,
+        connection=_presence_connection(presence) if presence else None,
         last_seen_at=presence.last_seen_at if presence else None,
     )
 
@@ -1345,20 +1373,22 @@ def post_robot_heartbeat(
     presence.current_mission_id = payload.current_mission_id
     presence.hostname = payload.hostname
     presence_payload = _presence_payload(presence)
-    # Home is durable state, not liveness state. Preserve the last valid pose when a
-    # robot temporarily starts without one configured or an older agent sends no value.
-    if payload.home_pose is not None:
-        presence_payload["home_pose"] = payload.home_pose.model_dump(mode="json")
-    elif not isinstance(presence_payload.get("home_pose"), dict):
+    heartbeat_payload = payload.model_dump(mode="json")
+    # A transient local-panel read failure must not erase the last connection state.
+    # The heartbeat still proves liveness; only replace connection when the robot
+    # supplied an authoritative value.
+    if payload.connection is None:
         previous_heartbeat = presence_payload.get("heartbeat")
-        previous_home = (
-            previous_heartbeat.get("home_pose")
-            if isinstance(previous_heartbeat, dict)
-            else None
-        )
-        if isinstance(previous_home, dict):
-            presence_payload["home_pose"] = previous_home
-    presence_payload["heartbeat"] = payload.model_dump(mode="json")
+        if isinstance(previous_heartbeat, dict):
+            previous_connection = previous_heartbeat.get("connection")
+            if previous_connection in {
+                "disconnected",
+                "connecting",
+                "connected",
+                "disconnecting",
+            }:
+                heartbeat_payload["connection"] = previous_connection
+    presence_payload["heartbeat"] = heartbeat_payload
     presence.payload_json = presence_payload
     # Liveness is measured by when this server received the heartbeat. Robot
     # clocks can drift or be reset, so a client-supplied timestamp must not be
@@ -1966,9 +1996,19 @@ def post_robot_command_status(
     if command.robot_user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Command not assigned to this robot")
 
+    presence_changed = _record_robot_connection(
+        robot_user_id=command.robot_user_id,
+        robot_username=command.robot_username,
+        connection=payload.connection,
+        db=db,
+    )
+
     # An operator can cancel a command mid-run; that is terminal and sticky, so a late agent
-    # update (the panel may still be finishing the bring-up in the background) must not revive it.
+    # update must not revive command history. Its physical connection state is still recorded
+    # above, because the panel may have finished the bring-up in the background.
     if command.status == "cancelled":
+        if presence_changed:
+            db.commit()
         return _command_to_response(command)
 
     command.status = payload.status
