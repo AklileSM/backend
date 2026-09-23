@@ -392,6 +392,42 @@ def _record_robot_connection(
     return True
 
 
+def _reconcile_active_command_from_connection(
+    *,
+    robot_user_id: str,
+    connection: str | None,
+    db: Session,
+) -> bool:
+    """Finish a stale lifecycle command when the physical stack reached its target."""
+    expected_kind = {
+        "connected": "connect",
+        "disconnected": "disconnect",
+    }.get(connection or "")
+    if expected_kind is None:
+        return False
+
+    command = db.scalar(
+        select(RobotCommand)
+        .where(
+            RobotCommand.robot_user_id == robot_user_id,
+            RobotCommand.kind == expected_kind,
+            RobotCommand.status.in_(_ACTIVE_COMMAND_STATUSES),
+        )
+        .order_by(RobotCommand.created_at.desc())
+    )
+    if command is None:
+        return False
+
+    command.status = "succeeded"
+    command.connection = connection
+    command.detail = (
+        "Reconciled from robot heartbeat: the control panel confirmed "
+        f"the robot is {connection}."
+    )
+    command.completed_at = _utc_now()
+    return True
+
+
 def _telemetry_to_response(presence: RobotPresence) -> RobotTelemetryResponse:
     payload = _presence_payload(presence)
     telemetry = payload.get("telemetry")
@@ -1394,6 +1430,15 @@ def post_robot_heartbeat(
     # clocks can drift or be reset, so a client-supplied timestamp must not be
     # able to keep an offline robot looking alive indefinitely.
     presence.last_seen_at = _utc_now()
+
+    # Final command-status delivery can be lost during a brief network interruption. The
+    # heartbeat is an independent, authenticated observation of the real control-panel state,
+    # so use it to close only an active command whose requested target has actually been reached.
+    _reconcile_active_command_from_connection(
+        robot_user_id=robot.id,
+        connection=payload.connection,
+        db=db,
+    )
 
     db.commit()
     db.refresh(presence)
