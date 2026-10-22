@@ -5,13 +5,14 @@ import io
 import mimetypes
 import re
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import Form, APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from PIL import Image
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.services.robot_maps import MAP_HISTORY_LIMIT, next_map_version
 from app.api.deps import get_current_user, require_admin
 from app.config import get_settings
 from app.database import get_db
@@ -144,6 +145,7 @@ def _robot_map_response(project: Project) -> RobotMapResponse:
     meta = project.robot_map_json if isinstance(project.robot_map_json, dict) else None
     if not meta:
         raise HTTPException(status_code=404, detail="No robot map uploaded")
+    previous = (meta.get("history") or [None])[0] or {}
     version = str(meta.get("uploaded_at") or project.updated_at or "")
     return RobotMapResponse(
         image_url=f"/api/projects/{project.id}/robot-map/image?v={version}",
@@ -156,6 +158,12 @@ def _robot_map_response(project: Project) -> RobotMapResponse:
         frame=str(meta.get("frame") or "map"),
         yaml_object_name=meta.get("yaml_object_name"),
         image_object_name=meta.get("image_object_name"),
+        map_version=meta.get("map_version"),
+        map_name=meta.get("map_name") or meta.get("source_yaml_name"),
+        uploaded_at=meta.get("uploaded_at"),
+        previous_map_name=(previous.get("map_name") or previous.get("source_yaml_name")) if previous else None,
+        previous_map_version=previous.get("map_version") if previous else None,
+        previous_uploaded_at=previous.get("uploaded_at") if previous else None,
     )
 
 
@@ -487,6 +495,7 @@ async def upload_robot_map(
     project_id: str,
     yaml_file: UploadFile = File(...),
     image_file: UploadFile = File(...),
+    map_name: str | None = Form(default=None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> RobotMapResponse:
@@ -508,8 +517,12 @@ async def upload_robot_map(
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Robot map image must be a readable image/PGM file") from exc
 
-    yaml_object_name = f"{project_id}/robot-map/map.yaml"
-    image_object_name = f"{project_id}/robot-map/map.png"
+    old_meta = project.robot_map_json if isinstance(project.robot_map_json, dict) else {}
+    # Each map is a new version in its own folder; the previous one is kept so the project can
+    # switch back, and waypoints placed on it retire (see services/robot_maps.py).
+    map_version = next_map_version(old_meta)
+    yaml_object_name = f"{project_id}/robot-map/v{map_version}/map.yaml"
+    image_object_name = f"{project_id}/robot-map/v{map_version}/map.png"
     storage_service.upload_bytes(
         bucket_name=settings.minio_bucket_floorplans,
         object_name=yaml_object_name,
@@ -523,13 +536,20 @@ async def upload_robot_map(
         content_type="image/png",
     )
 
-    old_meta = project.robot_map_json if isinstance(project.robot_map_json, dict) else {}
-    for old_name in (old_meta.get("yaml_object_name"), old_meta.get("image_object_name")):
-        if old_name and old_name not in {yaml_object_name, image_object_name}:
-            storage_service.remove_object_best_effort(settings.minio_bucket_floorplans, str(old_name))
+    history = list(old_meta.get("history") or [])
+    if old_meta.get("image_object_name"):
+        history.insert(0, {key: value for key, value in old_meta.items() if key != "history"})
+    for dropped in history[MAP_HISTORY_LIMIT:]:
+        for old_name in (dropped.get("yaml_object_name"), dropped.get("image_object_name")):
+            if old_name:
+                storage_service.remove_object_best_effort(settings.minio_bucket_floorplans, str(old_name))
+    history = history[:MAP_HISTORY_LIMIT]
 
     project.robot_map_json = {
         **parsed,
+        "map_version": map_version,
+        "map_name": (map_name or "").strip() or None,
+        "history": history,
         "width": width,
         "height": height,
         "frame": "map",
@@ -539,6 +559,31 @@ async def upload_robot_map(
         "source_image_name": image_file.filename,
         "uploaded_at": datetime.utcnow().isoformat(),
     }
+    project.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(project)
+    return _robot_map_response(project)
+
+
+@router.post("/{project_id}/robot-map/rollback", response_model=RobotMapResponse)
+def rollback_robot_map(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotMapResponse:
+    """Switch the project back to its previous robot map. Waypoints placed on that map become
+    usable again, and the ones placed on the map being replaced retire."""
+    project = _get_project_or_404(project_id, db)
+    member = _get_member_or_403(project_id, current_user, db)
+    if member is not None and member.role not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="Only project owners and editors can change the robot map")
+    meta = project.robot_map_json if isinstance(project.robot_map_json, dict) else {}
+    history = list(meta.get("history") or [])
+    if not history:
+        raise HTTPException(status_code=409, detail="There is no previous robot map to switch back to")
+    previous = dict(history[0])
+    current = {key: value for key, value in meta.items() if key != "history"}
+    project.robot_map_json = {**previous, "history": [current, *history[1:]][:MAP_HISTORY_LIMIT]}
     project.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(project)
@@ -557,9 +602,10 @@ def delete_robot_map(
         raise HTTPException(status_code=403, detail="Only project owners and editors can remove the robot map")
 
     meta = project.robot_map_json if isinstance(project.robot_map_json, dict) else {}
-    for object_name in (meta.get("yaml_object_name"), meta.get("image_object_name")):
-        if object_name:
-            storage_service.remove_object_best_effort(settings.minio_bucket_floorplans, str(object_name))
+    for entry in [meta, *(meta.get("history") or [])]:
+        for object_name in (entry.get("yaml_object_name"), entry.get("image_object_name")):
+            if object_name:
+                storage_service.remove_object_best_effort(settings.minio_bucket_floorplans, str(object_name))
     project.robot_map_json = None
     project.updated_at = datetime.utcnow()
     db.commit()

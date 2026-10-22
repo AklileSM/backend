@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api import admin, ai, annotations, auth, feedback, files, media, projects, reports, robot_assistant, robot_missions, robot_pairings, rooms, upload
+from app.api import admin, ai, annotations, auth, feedback, files, media, projects, reports, robot_missions, robot_pairings, rooms, upload
 from app.api.upload import cleanup_stale_uploads
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine
@@ -21,6 +21,7 @@ from app.services.db_migrations import (
     ensure_projects_owner_name_unique,
     ensure_reports_label,
     ensure_robot_capture_points_table,
+    ensure_robot_command_params,
     ensure_robot_mission_cancellation,
     ensure_robot_mission_scheduling,
     ensure_rooms_fields,
@@ -76,6 +77,7 @@ async def lifespan(_: FastAPI):
     ensure_robot_capture_points_table(engine)
     ensure_robot_mission_scheduling(engine)
     ensure_robot_mission_cancellation(engine)
+    ensure_robot_command_params(engine)
     ensure_annotations_extensions(engine)
     ensure_project_activity_table(engine)
     ensure_search_trigram_indexes(engine)
@@ -142,7 +144,6 @@ app.include_router(files.router, prefix="/api/files", tags=["Files"])
 app.include_router(upload.router, prefix="/api/upload", tags=["Upload"])
 app.include_router(robot_missions.router, prefix="/api", tags=["Robot Missions"])
 app.include_router(robot_pairings.router, prefix="/api", tags=["Robot Pairing"])
-app.include_router(robot_assistant.router, prefix="/api", tags=["Robot Assistant"])
 app.include_router(ai.router, prefix="/api/ai", tags=["AI"])
 app.include_router(reports.router, prefix="/api/reports", tags=["Reports"])
 app.include_router(annotations.router, prefix="/api/annotations", tags=["Annotations"])

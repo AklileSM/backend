@@ -49,7 +49,9 @@ from app.schemas import (
     RobotTelemetryResponse,
 )
 from app.services.activity import log_activity
+from app.services.robot_maps import current_map_version, is_retired, point_map_version, retired_detail
 from app.services.robot_schedules import (
+    _robot_has_active_mission,
     materialize_schedule,
     next_schedule_run,
     ordered_capture_points,
@@ -242,6 +244,7 @@ def _command_to_response(command: RobotCommand) -> RobotCommandResponse:
         id=command.id,
         robot_id=command.robot_username,
         kind=command.kind,
+        params=dict(command.params_json or {}),
         status=command.status,
         connection=command.connection,
         detail=command.detail,
@@ -252,8 +255,10 @@ def _command_to_response(command: RobotCommand) -> RobotCommandResponse:
     )
 
 
-def _capture_point_to_response(point: RobotCapturePoint) -> RobotCapturePointResponse:
+def _capture_point_to_response(point: RobotCapturePoint, project: Project) -> RobotCapturePointResponse:
     return RobotCapturePointResponse(
+        retired=is_retired(point, project),
+        map_version=point_map_version(point),
         id=point.id,
         project_id=point.project_id,
         name=point.name,
@@ -322,6 +327,9 @@ def _resolve_mission_waypoints(
         missing = [point_id for point_id in capture_point_ids if point_id not in by_id]
         if missing:
             raise HTTPException(status_code=404, detail=f"Capture point not found: {missing[0]}")
+        retired = [by_id[point_id] for point_id in capture_point_ids if is_retired(by_id[point_id], project)]
+        if retired:
+            raise HTTPException(status_code=422, detail=retired_detail(retired))
         for point_id in capture_point_ids:
             point = by_id[point_id]
             waypoint = _capture_point_to_waypoint(point)
@@ -552,7 +560,7 @@ def list_robot_capture_points(
         .where(RobotCapturePoint.project_id == project.id)
         .order_by(RobotCapturePoint.name.asc())
     ).all()
-    return [_capture_point_to_response(point) for point in points]
+    return [_capture_point_to_response(point, project) for point in points]
 
 
 @router.post(
@@ -581,7 +589,8 @@ def create_robot_capture_point(
         floorplan_x=payload.floorplan_x,
         floorplan_y=payload.floorplan_y,
         source=payload.source,
-        metadata_json=payload.metadata,
+        # Stamp the map the point was placed on, so it retires when the project map changes.
+        metadata_json={**payload.metadata, "map_version": current_map_version(project)},
         created_by_user_id=current_user.id,
     )
     db.add(point)
@@ -601,7 +610,7 @@ def create_robot_capture_point(
         target_id=point.id,
         metadata={"name": point.name, "room_slug": point.room_slug},
     )
-    return _capture_point_to_response(point)
+    return _capture_point_to_response(point, project)
 
 
 @router.patch(
@@ -638,7 +647,8 @@ def update_robot_capture_point(
         if field in data:
             setattr(point, field, data[field])
     if "metadata" in data:
-        point.metadata_json = data["metadata"] or {}
+        # The map a point belongs to is not editable: moving it means placing it again.
+        point.metadata_json = {**(data["metadata"] or {}), "map_version": point_map_version(point)}
 
     try:
         db.commit()
@@ -646,7 +656,7 @@ def update_robot_capture_point(
         db.rollback()
         raise HTTPException(status_code=400, detail="Capture point name already exists for this project") from exc
     db.refresh(point)
-    return _capture_point_to_response(point)
+    return _capture_point_to_response(point, project)
 
 
 @router.delete("/projects/{project_id}/robot-capture-points/{point_id}", status_code=204)
@@ -696,13 +706,16 @@ def _validate_schedule_configuration(
         validate_timezone(timezone_name)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    _, missing = ordered_capture_points(
+    points, missing = ordered_capture_points(
         db,
         project_id=project.id,
         capture_point_ids=capture_point_ids,
     )
     if missing:
         raise HTTPException(status_code=404, detail=f"Capture point not found: {missing[0]}")
+    retired = [point for point in points if is_retired(point, project)]
+    if retired:
+        raise HTTPException(status_code=422, detail=retired_detail(retired))
 
 
 @router.get("/robot/mission-schedules", response_model=list[RobotMissionScheduleResponse])
@@ -1963,6 +1976,16 @@ def create_robot_command(
 
     # Robots are not scoped per-user in this tool (list_robots returns them all), so any
     # authenticated operator may connect one — matching how missions and presence already work.
+    # Mapping commands that change a project's map need editor rights on that project, and the
+    # robot must be able to upload to it.
+    if payload.kind in ("map_save", "map_rollback"):
+        project = db.scalar(select(Project).where(Project.id == str(payload.params.get("project_id"))))
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        _require_project_editor(project, current_user, db)
+        _require_robot_project_upload_access(project, robot, db)
+    if payload.kind == "map_start" and _robot_has_active_mission(db, robot.id):
+        raise HTTPException(status_code=409, detail="The robot is running a capture. Stop it before mapping.")
 
     # One lifecycle command in flight at a time, so the progress tree can't show two
     # overlapping sequences. A repeat of the same kind is idempotent (returns the in-flight
@@ -1989,8 +2012,9 @@ def create_robot_command(
         robot_username=robot.username,
         requested_by_user_id=current_user.id,
         kind=payload.kind,
+        params_json=dict(payload.params) or None,
         status="queued",
-        connection="connecting" if payload.kind == "connect" else "disconnecting",
+        connection={"connect": "connecting", "disconnect": "disconnecting"}.get(payload.kind),
     )
     db.add(command)
     db.commit()
@@ -2080,15 +2104,19 @@ def post_robot_command_status(
 )
 def get_latest_robot_command(
     robot_id: str,
+    kind: str | None = Query(default=None, pattern=r"^(connection|map)$"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> RobotCommandResponse | Response:
+    """The robot's newest command. kind=connection limits it to connect/disconnect (the Connect
+    button), kind=map to the mapping commands (the "Record a new map" wizard)."""
     robot = _resolve_robot_user(robot_id, db)
-    command = db.scalar(
-        select(RobotCommand)
-        .where(RobotCommand.robot_user_id == robot.id)
-        .order_by(RobotCommand.created_at.desc())
-    )
+    stmt = select(RobotCommand).where(RobotCommand.robot_user_id == robot.id)
+    if kind == "connection":
+        stmt = stmt.where(RobotCommand.kind.in_(("connect", "disconnect")))
+    elif kind == "map":
+        stmt = stmt.where(RobotCommand.kind.like("map\\_%", escape="\\"))
+    command = db.scalar(stmt.order_by(RobotCommand.created_at.desc()))
     if command is None:
         return Response(status_code=204)
     return _command_to_response(command)

@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime
 from typing import Any
 
@@ -116,6 +117,14 @@ class RobotMapResponse(BaseModel):
     frame: str = "map"
     yaml_object_name: str | None = None
     image_object_name: str | None = None
+    # Versioning: waypoints placed on another version are retired. None for maps from before versions.
+    map_version: int | None = None
+    map_name: str | None = None
+    uploaded_at: str | None = None
+    # The map the project can switch back to, if any.
+    previous_map_name: str | None = None
+    previous_map_version: int | None = None
+    previous_uploaded_at: str | None = None
 
 
 class ProjectCreateRequest(BaseModel):
@@ -327,6 +336,9 @@ class RobotCapturePointResponse(BaseModel):
     floorplan_y: float | None = None
     source: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # Placed on a different robot map than the project's current one: unsafe to visit.
+    retired: bool = False
+    map_version: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -487,9 +499,23 @@ class RobotMissionStatusUpdateRequest(BaseModel):
     result: dict[str, Any] | None = None
 
 
+MAP_NAME_PATTERN = r"^[a-z0-9_]{1,64}$"
+
+
 class RobotCommandCreateRequest(BaseModel):
     robot_id: str = Field(min_length=1, max_length=64)
-    kind: str = Field(pattern=r"^(connect|disconnect)$")
+    kind: str = Field(pattern=r"^(connect|disconnect|map_start|map_save|map_cancel|map_rollback)$")
+    params: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_params(self) -> "RobotCommandCreateRequest":
+        if self.kind == "map_save":
+            name = str(self.params.get("map_name") or "")
+            if not re.fullmatch(MAP_NAME_PATTERN, name):
+                raise ValueError("map_name must use only lowercase letters, numbers and underscores")
+        if self.kind in ("map_save", "map_rollback") and not self.params.get("project_id"):
+            raise ValueError("project_id is required for map_save and map_rollback")
+        return self
 
 
 class RobotCommandStatusUpdateRequest(BaseModel):
@@ -504,6 +530,7 @@ class RobotCommandResponse(BaseModel):
     id: str
     robot_id: str
     kind: str
+    params: dict[str, Any] = Field(default_factory=dict)
     status: str
     connection: str | None = None
     detail: str | None = None
@@ -511,30 +538,6 @@ class RobotCommandResponse(BaseModel):
     created_at: datetime
     dispatched_at: datetime | None = None
     completed_at: datetime | None = None
-
-
-class RobotAssistantMessageRequest(BaseModel):
-    project_slug: str = Field(min_length=1, max_length=100)
-    robot_id: str = Field(min_length=1, max_length=64)
-    message: str = Field(default="", max_length=1000)
-    # Conversation state returned by the previous reply, sent back unchanged.
-    state: dict[str, Any] | None = None
-    timezone: str = Field(default="UTC", min_length=1, max_length=64)
-    robot_connected: bool = False
-    voice: bool = False
-    event: str | None = Field(
-        default=None, pattern=r"^(robot_connected|robot_disconnected|robot_connect_failed|mission_finished)$"
-    )
-    mission_id: str | None = Field(default=None, max_length=36)
-    # Recent turns, oldest first, so conversational replies can follow the chat.
-    history: list[dict[str, str]] = Field(default_factory=list, max_length=20)
-
-
-class RobotAssistantMessageResponse(BaseModel):
-    reply: str
-    state: dict[str, Any] | None = None
-    action: dict[str, Any] | None = None
-    draft: dict[str, Any] | None = None
 
 
 class RoomResponse(BaseModel):

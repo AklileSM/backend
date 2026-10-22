@@ -488,6 +488,19 @@ def ensure_robot_mission_scheduling(engine: Engine) -> None:
     logger.info("Ensured recurring robot mission schedule schema")
 
 
+def ensure_robot_command_params(engine: Engine) -> None:
+    """Add params_json to robot_commands (arguments for mapping commands)."""
+    inspector = inspect(engine)
+    if not inspector.has_table("robot_commands"):
+        return
+    cols = {c["name"] for c in inspector.get_columns("robot_commands")}
+    if "params_json" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE robot_commands ADD COLUMN params_json JSON"))
+    logger.info("Added robot_commands.params_json column")
+
+
 def ensure_robot_mission_cancellation(engine: Engine) -> None:
     """Add acknowledged cancellation fields to existing robot missions."""
     inspector = inspect(engine)

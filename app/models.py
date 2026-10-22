@@ -659,7 +659,10 @@ class RobotCommand(Base):
     requested_by_user_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    kind: Mapped[str] = mapped_column(String(32), nullable=False)  # connect | disconnect
+    # connect | disconnect | map_start | map_save | map_cancel | map_rollback
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Arguments for the robot, e.g. {"map_name": ..., "project_id": ...} for map_save.
+    params_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
     # disconnected | connecting | connected | disconnecting — the stack state this command left.
     connection: Mapped[str | None] = mapped_column(String(32), nullable=True)

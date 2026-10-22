@@ -16,8 +16,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.services.robot_maps import is_retired, retired_detail
 from app.database import SessionLocal
 from app.models import (
+    Project,
     ProjectMember,
     RobotCapturePoint,
     RobotCommand,
@@ -242,6 +244,15 @@ def materialize_schedule(
         schedule.next_run_at = None
         schedule.last_outcome = "invalid"
         schedule.last_error = f"Capture point no longer exists: {missing[0]}"
+        return None
+    project = db.get(Project, schedule.project_id)
+    retired = [point for point in points if project is not None and is_retired(point, project)]
+    if retired:
+        # Coordinates from another map would send the robot to the wrong place: never run them.
+        schedule.enabled = False
+        schedule.next_run_at = None
+        schedule.last_outcome = "invalid"
+        schedule.last_error = retired_detail(retired)
         return None
 
     waypoints = [_capture_point_to_waypoint(point) for point in points]
