@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     vision_api_url: str = "http://192.168.50.103:11434/v1/chat/completions"
     vision_model: str = "qwen3-vl:8b"
 
+    # Robot assistant: Ollama's native chat endpoint, which takes a JSON schema as "format".
+    assistant_api_url: str = "http://192.168.50.103:11434/api/chat"
+    assistant_model: str = "gemma4:e4b"
+
     @field_validator("vision_api_key", mode="before")
     @classmethod
     def strip_vision_api_key(cls, v: object) -> object:
