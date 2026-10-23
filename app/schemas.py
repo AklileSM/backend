@@ -641,6 +641,10 @@ class RobotAssistantMessageResponse(BaseModel):
     draft: dict[str, Any] | None = None
 
 
+class RobotAssistantSpeechRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
 class RoomResponse(BaseModel):
     id: str
     name: str

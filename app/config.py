@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     # Robot assistant: Ollama's native chat endpoint, which takes a JSON schema as "format".
     assistant_api_url: str = "http://192.168.50.103:11434/api/chat"
     assistant_model: str = "gemma4:e4b"
+    # Spoken replies: Kokoro's OpenAI-style speech endpoint on the same machine. Empty uses the
+    # browser's own voice.
+    assistant_tts_url: str = "http://192.168.50.103:8880/v1/audio/speech"
+    assistant_tts_voice: str = "af_jessica"
 
     @field_validator("vision_api_key", mode="before")
     @classmethod
