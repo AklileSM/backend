@@ -540,6 +540,30 @@ class RobotCommandResponse(BaseModel):
     completed_at: datetime | None = None
 
 
+class RobotAssistantMessageRequest(BaseModel):
+    project_slug: str = Field(min_length=1, max_length=100)
+    robot_id: str = Field(min_length=1, max_length=64)
+    message: str = Field(default="", max_length=1000)
+    # Conversation state returned by the previous reply, sent back unchanged.
+    state: dict[str, Any] | None = None
+    timezone: str = Field(default="UTC", min_length=1, max_length=64)
+    robot_connected: bool = False
+    voice: bool = False
+    event: str | None = Field(
+        default=None, pattern=r"^(robot_connected|robot_disconnected|robot_connect_failed|mission_finished)$"
+    )
+    mission_id: str | None = Field(default=None, max_length=36)
+    # Recent turns, oldest first, so conversational replies can follow the chat.
+    history: list[dict[str, str]] = Field(default_factory=list, max_length=20)
+
+
+class RobotAssistantMessageResponse(BaseModel):
+    reply: str
+    state: dict[str, Any] | None = None
+    action: dict[str, Any] | None = None
+    draft: dict[str, Any] | None = None
+
+
 class RoomResponse(BaseModel):
     id: str
     name: str
