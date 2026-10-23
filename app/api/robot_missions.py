@@ -47,8 +47,12 @@ from app.schemas import (
     RobotSummaryResponse,
     RobotTelemetryRequest,
     RobotTelemetryResponse,
+    RobotMapPreviewAck,
+    RobotMapPreviewRequest,
+    RobotMapPreviewResponse,
 )
 from app.services.activity import log_activity
+from app.services.robot_map_preview import get_map_preview, record_map_preview
 from app.services.robot_maps import current_map_version, is_retired, point_map_version, retired_detail
 from app.services.robot_schedules import (
     _robot_has_active_mission,
@@ -1531,6 +1535,35 @@ def get_robot_telemetry(
     if payload is None:
         raise HTTPException(status_code=404, detail="Robot telemetry not found")
     return payload
+
+
+@router.post("/robots/{robot_id}/map-preview", response_model=RobotMapPreviewAck)
+def post_robot_map_preview(
+    robot_id: str,
+    payload: RobotMapPreviewRequest,
+    current_user: User = Depends(require_robot),
+    db: Session = Depends(get_db),
+) -> RobotMapPreviewAck:
+    """A live frame from the laptop while a new map is recorded (see robot/map_preview.py)."""
+    _require_robot_identity(robot_id, current_user)
+    robot = _resolve_robot_user(robot_id, db)
+    return RobotMapPreviewAck(**record_map_preview(robot.id, payload.model_dump(mode="json")))
+
+
+@router.get("/robots/{robot_id}/map-preview", response_model=RobotMapPreviewResponse)
+def get_robot_map_preview(
+    robot_id: str,
+    image_seq: int | None = Query(default=None, ge=0),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RobotMapPreviewResponse:
+    if current_user.is_robot:
+        _require_robot_identity(robot_id, current_user)
+    robot = _resolve_robot_user(robot_id, db)
+    preview = get_map_preview(robot.id, image_seq=image_seq)
+    if preview is None:
+        raise HTTPException(status_code=404, detail="No live map from this robot")
+    return RobotMapPreviewResponse.model_validate(preview)
 
 
 @router.get("/robots/{robot_id}/telemetry/stream")

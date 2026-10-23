@@ -290,6 +290,60 @@ class RobotTelemetryResponse(RobotTelemetryRequest):
     received_at_utc: datetime
 
 
+class RobotMapPreviewPose(BaseModel):
+    x: float
+    y: float
+    yaw: float | None = None
+
+
+class RobotMapPreviewImage(BaseModel):
+    """The occupancy grid SLAM has built so far, as a PNG. `seq` changes with every new grid."""
+    seq: int = Field(ge=0)
+    width: int = Field(ge=1, le=8192)
+    height: int = Field(ge=1, le=8192)
+    resolution: float = Field(gt=0)
+    origin_x: float
+    origin_y: float
+    mapped_area_m2: float | None = Field(default=None, ge=0)
+    png_base64: str = Field(min_length=1, max_length=8_000_000)
+
+
+class RobotMapPreviewRequest(BaseModel):
+    # One id per mapping run; a new id starts a new trail and home marker.
+    session_id: str = Field(min_length=1, max_length=64)
+    pose: RobotMapPreviewPose | None = None
+    map: RobotMapPreviewImage | None = None
+
+
+class RobotMapPreviewAck(BaseModel):
+    # The map image the backend holds, so the laptop resends it after a backend restart.
+    map_seq: int | None = None
+
+
+class RobotMapPreviewMap(BaseModel):
+    seq: int
+    width: int
+    height: int
+    resolution: float
+    origin_x: float
+    origin_y: float
+    mapped_area_m2: float | None = None
+    # A data URL, left out when the caller already has this seq.
+    image: str | None = None
+
+
+class RobotMapPreviewResponse(BaseModel):
+    session_id: str
+    started_at_utc: datetime
+    updated_at_utc: datetime
+    map_updated_at_utc: datetime | None = None
+    home: RobotMapPreviewPose | None = None
+    pose: RobotMapPreviewPose | None = None
+    trail: list[RobotMapPreviewPose] = Field(default_factory=list)
+    distance_m: float = 0.0
+    map: RobotMapPreviewMap | None = None
+
+
 class RobotSummaryResponse(BaseModel):
     robot_id: str
     username: str
