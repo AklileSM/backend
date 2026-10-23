@@ -52,6 +52,7 @@ from app.schemas import (
     RobotMapPreviewResponse,
 )
 from app.services.activity import log_activity
+from app.services.robot_capabilities import capture_capabilities, requested_outputs, unavailable_detail
 from app.services.robot_map_preview import get_map_preview, record_map_preview
 from app.services.robot_maps import current_map_version, is_retired, point_map_version, retired_detail
 from app.services.robot_schedules import (
@@ -503,7 +504,16 @@ def _robot_to_summary(robot: User, presence: RobotPresence | None) -> RobotSumma
         hostname=presence.hostname if presence else None,
         connection=_presence_connection(presence) if presence else None,
         last_seen_at=presence.last_seen_at if presence else None,
+        capture_capabilities=capture_capabilities(presence),
     )
+
+
+def _require_capture_available(db: Session, robot_user_id: str, robot_meta: dict | None, capture_mode: str | None) -> None:
+    """Refuse a capture type the robot has no working payload for right now."""
+    presence = db.scalar(select(RobotPresence).where(RobotPresence.robot_user_id == robot_user_id))
+    detail = unavailable_detail(presence, requested_outputs(robot_meta, capture_mode))
+    if detail:
+        raise HTTPException(status_code=422, detail=detail)
 
 
 def _apply_step_results(mission: RobotMission, result: dict | None) -> None:
@@ -779,6 +789,7 @@ def create_robot_mission_schedule(
         capture_point_ids=payload.capture_point_ids,
         timezone_name=payload.timezone,
     )
+    _require_capture_available(db, robot.id, payload.robot_meta, payload.capture_mode)
 
     now = utc_now()
     schedule = RobotMissionSchedule(
@@ -884,6 +895,15 @@ def update_robot_mission_schedule(
         capture_point_ids=capture_point_ids,
         timezone_name=timezone_name,
     )
+    # Only a change to what is captured is checked: renaming a schedule while the LiDAR is
+    # unplugged must still work.
+    if payload.capture_mode is not None or payload.robot_meta is not None:
+        _require_capture_available(
+            db,
+            schedule.robot_user_id,
+            payload.robot_meta if payload.robot_meta is not None else schedule.robot_meta_json,
+            payload.capture_mode or schedule.capture_mode,
+        )
 
     if payload.name is not None:
         schedule.name = payload.name.strip()
@@ -1070,6 +1090,7 @@ def create_robot_mission(
         project=project,
         db=db,
     )
+    _require_capture_available(db, robot.id, robot_meta, payload.capture_mode)
 
     mission = RobotMission(
         robot_user_id=robot.id,
@@ -1441,6 +1462,12 @@ def post_robot_heartbeat(
                 "disconnecting",
             }:
                 heartbeat_payload["connection"] = previous_connection
+    # Same for payloads: the robot leaves them out until its first check after a restart.
+    if payload.payloads is None:
+        heartbeat_payload.pop("payloads", None)
+        previous_heartbeat = presence_payload.get("heartbeat")
+        if isinstance(previous_heartbeat, dict) and isinstance(previous_heartbeat.get("payloads"), list):
+            heartbeat_payload["payloads"] = previous_heartbeat["payloads"]
     presence_payload["heartbeat"] = heartbeat_payload
     presence.payload_json = presence_payload
     # Liveness is measured by when this server received the heartbeat. Robot

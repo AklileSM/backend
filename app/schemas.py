@@ -236,6 +236,16 @@ class RobotPairingClaimResponse(BaseModel):
     sdk_capture_cmd: str | None = "/home/unitree/SiteScope/robot/sitescope_capture_still --output {output_path}"
 
 
+class RobotPayloadStatus(BaseModel):
+    """One capture payload as the robot last found it (robot/payloads.py)."""
+    id: str = Field(min_length=1, max_length=32)
+    output: str = Field(min_length=1, max_length=32)
+    detected: bool
+    name: str | None = Field(default=None, max_length=120)
+    detail: str | None = Field(default=None, max_length=300)
+    checked_at_utc: datetime | None = None
+
+
 class RobotHeartbeatRequest(BaseModel):
     robot_id: str
     status: str = Field(min_length=1, max_length=32)
@@ -246,6 +256,18 @@ class RobotHeartbeatRequest(BaseModel):
         pattern=r"^(disconnected|connecting|connected|disconnecting)$",
     )
     reported_at_utc: datetime | None = None
+    # Left out until the robot's first payload check has finished; the last report is kept.
+    payloads: list[RobotPayloadStatus] | None = Field(default=None, max_length=16)
+
+
+class RobotCaptureCapability(BaseModel):
+    output: str
+    label: str
+    available: bool
+    # False when the robot doesn't report payloads (older agent): available by default.
+    reported: bool
+    payload_name: str | None = None
+    reason: str | None = None
 
 
 class RobotPresenceResponse(BaseModel):
@@ -352,6 +374,7 @@ class RobotSummaryResponse(BaseModel):
     hostname: str | None = None
     connection: str | None = None
     last_seen_at: datetime | None = None
+    capture_capabilities: list[RobotCaptureCapability] = Field(default_factory=list)
 
 
 class RobotCapturePointCreateRequest(BaseModel):

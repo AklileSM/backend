@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.api.robot_missions import (
@@ -37,7 +37,8 @@ from app.api.robot_missions import (
     update_robot_mission_schedule,
 )
 from app.config import get_settings
-from app.models import Project, Room, RobotCapturePoint, RobotMission, RobotMissionSchedule, User
+from app.models import Project, Room, RobotCapturePoint, RobotMission, RobotMissionSchedule, RobotPresence, User
+from app.services.robot_capabilities import SUPPORTED_OUTPUTS, capture_capabilities
 from app.schemas import (
     RobotCommandCreateRequest,
     RobotMissionCreateRequest,
@@ -64,12 +65,9 @@ TEXT_LIST_LIMIT = 10
 MAX_SUGGESTIONS = 3
 
 CAPABILITIES = "I can send the robot to a waypoint, create a schedule, or stop the robot."
-CAPTURE_OPTIONS = "I can capture a 360° image, a point cloud, or both."
-CAPABILITIES_FULL = (
-    "I can send the robot to a waypoint to capture a 360° image, a point cloud, or both, for example "
-    "\"go to the kitchen and take a photo\". I can also set up recurring capture schedules, list the waypoints, "
-    "connect or disconnect the robot, stop it, and open the page's tabs. And I'm happy to chat or answer "
-    "construction questions."
+CAPABILITIES_REST = (
+    "I can also set up recurring capture schedules, list the waypoints, connect or disconnect the robot, "
+    "stop it, and open the page's tabs. And I'm happy to chat or answer construction questions."
 )
 DEFAULT_FIELDS_NOTE = (
     "Time zone, busy handling, auto-connect, allowed lateness and failure handling "
@@ -157,7 +155,7 @@ def parse_with_llm(message: str, last_question: str | None) -> dict[str, Any] | 
 
 CHAT_PROMPT = """You are SiteScope's assistant, a friendly, helpful general assistant for people on a construction project. You can talk about anything: say hello, make small talk, answer general questions, and help with construction topics such as materials, methods, safety, scheduling or terminology. Talk the way a normal, warm assistant would.
 
-The app around you can also control a site robot. Mention it only when it is relevant to what the person says, never in every reply. The robot can go to saved waypoints and capture a 360-degree image, a point cloud, or both; it can run on recurring schedules; it can list the waypoints; it can be connected or disconnected; and it can be stopped. The app can also open the page's tabs (Route, Schedules, Progress, Live map, History) and pause, resume, run or delete schedules. Separate code carries all of these out, not you.
+The app around you can also control a site robot. Mention it only when it is relevant to what the person says, never in every reply. The robot can go to saved waypoints and capture a 360-degree image and/or a point cloud, but only with the payloads that are working right now (the facts below say which); it can run on recurring schedules; it can list the waypoints; it can be connected or disconnected; and it can be stopped. The app can also open the page's tabs (Route, Schedules, Progress, Live map, History) and pause, resume, run or delete schedules. Separate code carries all of these out, not you.
 
 Rules:
 - Don't open with a greeting unless the person greeted you.
@@ -645,10 +643,22 @@ class _Context:
     chatter: Chatter
     # Set when the same message also asked to connect the robot ("connect it and go to the lobby").
     connect_ok: bool = False
+    # What the robot can capture right now (services/robot_capabilities.py). Empty means unknown:
+    # everything SiteScope supports is offered.
+    captures: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def list_limit(self) -> int:
         return SPOKEN_LIST_LIMIT if self.voice else TEXT_LIST_LIMIT
+
+    def available_captures(self) -> list[str]:
+        if not self.captures:
+            return list(SUPPORTED_OUTPUTS)
+        return [item["output"] for item in self.captures if item["available"]]
+
+    def capture_capability(self, output: str) -> dict[str, Any] | None:
+        return next((item for item in self.captures if item["output"] == output), None)
+
 
     def point(self, point_id: str) -> RobotCapturePoint | None:
         return next((p for p in self.points if p.id == point_id), None)
@@ -685,6 +695,62 @@ def _ask(
 
 def _done(reply: str, action: dict[str, Any] | None = None) -> AssistantResult:
     return AssistantResult(reply=reply, state=None, action=action)
+
+
+def _sentence(text: str | None) -> str:
+    text = (text or "").strip()
+    return text if not text or text[-1] in ".!?" else f"{text}."
+
+
+def _capture_label(output: str) -> str:
+    return SUPPORTED_OUTPUTS.get(output, output)
+
+
+def capture_choices(ctx: _Context) -> str:
+    """The capture types on offer, for a question: "a 360° image, a point cloud, or both"."""
+    labels = [f"a {_capture_label(output)}" for output in ctx.available_captures()]
+    if len(labels) == 2:
+        return f"{labels[0]}, {labels[1]}, or both"
+    return _join(labels) if labels else "nothing"
+
+
+def capture_options(ctx: _Context) -> str:
+    """What the robot can capture right now, and why anything else can't be."""
+    available = ctx.available_captures()
+    missing = " ".join(
+        f"A {item['label']} isn't possible right now: {_sentence(item['reason'])}"
+        for item in ctx.captures if not item["available"]
+    )
+    if not available:
+        return f"The robot can't capture anything right now. {missing}".strip()
+    if len(available) == 1:
+        return f"Right now I can only capture {capture_choices(ctx)}. {missing}".strip()
+    return f"I can capture {capture_choices(ctx)}."
+
+
+def capabilities_full(ctx: _Context) -> str:
+    if not ctx.available_captures():
+        return f"I can send the robot to waypoints to capture. {capture_options(ctx)} {CAPABILITIES_REST}"
+    example = "take a photo" if "image" in ctx.available_captures() else "do a scan"
+    return (f"I can send the robot to a waypoint to capture {capture_choices(ctx)}, for example "
+            f"\"go to the kitchen and {example}\". {CAPABILITIES_REST}")
+
+
+def _capture_gate(ctx: _Context, state: dict[str, Any], prefix: str, where: str) -> AssistantResult | None:
+    """Stop a capture the robot can't do right now, and offer what it can instead."""
+    available = ctx.available_captures()
+    if not available:
+        return _done(prefix + capture_options(ctx))
+    blocked = [output for output in state.get("capture") or [] if output not in available]
+    if not blocked:
+        return None
+    capability = ctx.capture_capability(blocked[0]) or {}
+    why = f"I can't take a {_capture_label(blocked[0])} right now: {_sentence(capability.get('reason'))} "
+    state = {**state, "capture": []}
+    if len(available) == 1:
+        return _ask(state, "capture", f"Should I capture {capture_choices(ctx)} {where} instead?",
+                    prefix=prefix + why, capture_offer=available)
+    return _ask(state, "capture", f"What should I capture {where}: {capture_choices(ctx)}?", prefix=prefix + why)
 
 
 def match_points(query: str, points: list[RobotCapturePoint]) -> tuple[RobotCapturePoint | None, list[RobotCapturePoint]]:
@@ -926,6 +992,7 @@ def _facts(ctx: _Context, state: dict[str, Any] | None) -> str:
         f"Project: {ctx.project.name}.",
         f"Robot: {ctx.robot_id}, {'connected' if ctx.robot_connected else 'not connected'}.",
         f"Robot activity: {'a capture is ' + mission.status.replace('_', ' ') if mission else 'idle'}.",
+        f"What the robot can capture right now: {capture_options(ctx)}",
         (
             f"Waypoints ({len(names)}): {', '.join(names[:40])}{', and more' if len(names) > 40 else ''}."
             if names
@@ -1013,7 +1080,7 @@ def _slot_help(ctx: _Context, state: dict[str, Any]) -> AssistantResult:
             return _done("This project has no waypoints yet. Add them on the Route tab first.")
         return _list_rooms(ctx, state)
     if awaiting == "capture":
-        return AssistantResult(reply=f"{CAPTURE_OPTIONS} Which one would you like?", state=state)
+        return AssistantResult(reply=f"{capture_options(ctx)} Which one would you like?", state=state)
     if awaiting == "time_ampm":
         first, second = state.get("time_candidates") or ["", ""]
         return AssistantResult(reply=f"{first} is in the morning and {second} is in the evening. {reask}", state=state)
@@ -1026,7 +1093,7 @@ def _not_understood(ctx: _Context, state: dict[str, Any]) -> AssistantResult:
     if awaiting in WAYPOINT_SLOTS and awaiting != "waypoint_confirm":
         hint = "Tell me a waypoint name, or ask me to list them."
     elif awaiting == "capture":
-        hint = CAPTURE_OPTIONS
+        hint = capture_options(ctx)
     else:
         hint = SLOT_HELP.get(awaiting, "")
     return AssistantResult(reply=f"Sorry, I didn't get that. {hint} {reask}".replace("  ", " "), state=state)
@@ -1164,13 +1231,16 @@ def _advance_go_to(ctx: _Context, state: dict[str, Any], prefix: str = "") -> As
         question.reply = prefix + question.reply
         return question
     names = ctx.names([entry["id"] for entry in state["waypoints"]])
+    gate = _capture_gate(ctx, state, prefix, f"at {_join(names)}")
+    if gate is not None:
+        return gate
     if not state.get("capture"):
         return _ask(
             state,
             "capture",
             f"What should I capture at {_join(names)}? Want me to list the options?",
             prefix=prefix,
-            reask=f"What should I capture at {_join(names)}: a 360° image, a point cloud, or both?",
+            reask=f"What should I capture at {_join(names)}: {capture_choices(ctx)}?",
         )
     if _active_mission(ctx) is not None:
         return _done(f"{prefix}The robot is busy with another capture. Say stop to cancel it first.")
@@ -1234,6 +1304,11 @@ def _create_schedule(ctx: _Context, state: dict[str, Any]) -> AssistantResult:
 
 
 def _advance_schedule(ctx: _Context, state: dict[str, Any], prefix: str = "") -> AssistantResult:
+    # Say straight away that a named capture type can't be done, not after every other question.
+    if state.get("capture"):
+        gate = _capture_gate(ctx, state, prefix, "at each stop")
+        if gate is not None:
+            return gate
     if not state.get("name"):
         return _ask(state, "name", "What should I call this schedule?", prefix=prefix)
     if not state.get("waypoints"):
@@ -1262,13 +1337,16 @@ def _advance_schedule(ctx: _Context, state: dict[str, Any], prefix: str = "") ->
         return _ask(state, "weekdays_confirm", f"{days[:1].upper()}{days[1:]}, right?", prefix=prefix)
     if not state.get("weekdays"):
         return _ask(state, "weekdays", "Which days should it run?", prefix=prefix)
+    gate = _capture_gate(ctx, state, prefix, "at each stop")
+    if gate is not None:
+        return gate
     if not state.get("capture"):
         return _ask(
             state,
             "capture",
             "What should it capture at each stop? Want me to list the options?",
             prefix=prefix,
-            reask="What should it capture at each stop: a 360° image, a point cloud, or both?",
+            reask=f"What should it capture at each stop: {capture_choices(ctx)}?",
         )
     result = _create_schedule(ctx, state)
     result.reply = prefix + result.reply
@@ -1952,9 +2030,15 @@ def _fill_slot(ctx: _Context, state: dict[str, Any], text: str, parsed: _LazyPar
         if capture:
             return _advance(ctx, _absorb(ctx, {**state, "capture": capture}, text, skip="capture"))
         answer = yes_or_no(text)
+        offer = state.get("capture_offer")
         if answer == "yes":
+            # "Should I capture a 360° image instead?" — yes takes the offer.
+            if offer:
+                return _advance(ctx, {**state, "capture": list(offer), "capture_offer": None})
             return _slot_help(ctx, state)
         if answer == "no":
+            if offer:
+                return _done("OK, I'll leave it there.")
             return AssistantResult(reply=f"OK. {state.get('reask')}", state=state)
         return None
 
@@ -2184,6 +2268,10 @@ def _handle_message(
         ).all()
     )
     rooms = db.scalars(select(Room).where(Room.project_id == project.id)).all()
+    robot = db.scalar(select(User).where(or_(User.id == robot_id, User.username == robot_id)))
+    presence = (
+        db.scalar(select(RobotPresence).where(RobotPresence.robot_user_id == robot.id)) if robot is not None else None
+    )
     ctx = _Context(
         db=db,
         user=user,
@@ -2197,6 +2285,7 @@ def _handle_message(
         history=list(history or []),
         chatter=chatter or chat_with_llm,
         connect_ok=connect_ok,
+        captures=capture_capabilities(presence),
     )
     state = dict(state) if state else None
 
@@ -2263,7 +2352,7 @@ def _handle_message(
             return _answer(ctx, state, text, parsed)
 
         if _CAPABILITY_RE.search(text):
-            return _done(CAPABILITIES_FULL)
+            return _done(capabilities_full(ctx))
         if _STATUS_RE.search(text):
             return _done(_status_reply(ctx))
 

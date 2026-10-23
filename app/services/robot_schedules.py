@@ -26,7 +26,9 @@ from app.models import (
     RobotMission,
     RobotMissionSchedule,
     RobotMissionStep,
+    RobotPresence,
 )
+from app.services.robot_capabilities import requested_outputs, unavailable_detail
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +255,14 @@ def materialize_schedule(
         schedule.next_run_at = None
         schedule.last_outcome = "invalid"
         schedule.last_error = retired_detail(retired)
+        return None
+
+    presence = db.scalar(select(RobotPresence).where(RobotPresence.robot_user_id == schedule.robot_user_id))
+    unavailable = unavailable_detail(presence, requested_outputs(schedule.robot_meta_json, schedule.capture_mode))
+    if unavailable:
+        # The payload may be plugged back in by the next run, so skip this one and stay on.
+        schedule.last_outcome = "skipped_unavailable"
+        schedule.last_error = unavailable
         return None
 
     waypoints = [_capture_point_to_waypoint(point) for point in points]

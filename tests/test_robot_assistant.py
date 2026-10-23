@@ -15,6 +15,7 @@ from app.models import (
     RobotCommand,
     RobotMission,
     RobotMissionSchedule,
+    RobotPresence,
     Room,
     User,
 )
@@ -725,11 +726,14 @@ class PendingQuestionTests(ConversationBase):
         self.assertEqual(self.missions(), [])
 
     def test_capability_questions_get_the_full_answer(self) -> None:
-        from app.services.robot_assistant import CAPABILITIES_FULL
-
         for message in ["what can you do?", "help", "what are the choices?", "what are my options", "how does this work?"]:
             with self.subTest(message=message):
-                self.assertEqual(self.say(message), CAPABILITIES_FULL)
+                reply = self.say(message)
+                self.assertTrue(reply.startswith(
+                    'I can send the robot to a waypoint to capture a 360° image, a point cloud, or both, for example '
+                    '"go to the kitchen and take a photo".'
+                ), reply)
+                self.assertIn("recurring capture schedules", reply)
         self.assertEqual(self.chat.calls, [])
 
     def test_offer_ended_by_thanks_does_not_repeat_the_offer(self) -> None:
@@ -1007,6 +1011,85 @@ class PendingQuestionTests(ConversationBase):
         facts = self.chat.calls[-1][2]
         self.assertIn('Schedules: "Demo 1" on weekdays at 08:00, switched off.', facts)
         self.assertIn("Current local time:", facts)
+
+
+class PayloadCapabilityTests(ConversationBase):
+    """The assistant offers only the capture types whose payload the robot reports as working."""
+
+    LIDAR_DOWN = "No point cloud arrived on /livox/lidar in 5 s."
+
+    def report(self, *, camera: bool = True, lidar: bool = True) -> None:
+        payloads = [
+            {"id": "camera", "output": "image", "detected": camera, "name": "Insta360 X4",
+             "detail": "USB 2e1a:0002" if camera else "The 360 camera isn't connected over USB (or isn't switched on)."},
+            {"id": "lidar", "output": "pointcloud", "detected": lidar, "name": "LiDAR",
+             "detail": "/livox/lidar: 20000 points per scan" if lidar else self.LIDAR_DOWN},
+        ]
+        self.db.add(RobotPresence(robot_user_id=self.robot.id, robot_username="robot-1",
+                                  payload_json={"heartbeat": {"payloads": payloads}}))
+        self.db.commit()
+
+    def test_options_list_only_what_works_and_say_why(self) -> None:
+        self.report(lidar=False)
+        self.parser.readings = {"go to room1": {"intent": "go_to", "waypoints": ["room1"]}}
+        self.assertEqual(self.say("go to room1"), "What should I capture at room1? Want me to list the options?")
+        self.assertEqual(
+            self.say("yes"),
+            f"Right now I can only capture a 360° image. A point cloud isn't possible right now: {self.LIDAR_DOWN} "
+            "Which one would you like?",
+        )
+        self.assertEqual(self.say("a photo"), "Going to room1 and capturing a 360° image.")
+
+    def test_asking_for_a_missing_payload_offers_the_working_one(self) -> None:
+        self.report(lidar=False)
+        message = "go to room2 and grab a point cloud"
+        self.parser.readings = {message: {"intent": "go_to", "waypoints": ["room2"]}}
+        self.assertEqual(
+            self.say(message),
+            f"I can't take a point cloud right now: {self.LIDAR_DOWN} Should I capture a 360° image at room2 instead?",
+        )
+        self.assertEqual(self.missions(), [])
+        self.assertEqual(self.say("yes"), "Going to room2 and capturing a 360° image.")
+        [mission] = self.missions()
+        self.assertEqual(mission.robot_meta_json["capture_outputs"], ["image"])
+
+    def test_declining_the_offer_does_nothing(self) -> None:
+        self.report(camera=False)
+        message = "go to room2 and take a photo and a point cloud"
+        self.parser.readings = {message: {"intent": "go_to", "waypoints": ["room2"]}}
+        self.assertIn("I can't take a 360° image right now", self.say(message))
+        self.assertEqual(self.say("no"), "OK, I'll leave it there.")
+        self.assertIsNone(self.state)
+        self.assertEqual(self.missions(), [])
+
+    def test_nothing_working_means_no_capture(self) -> None:
+        self.report(camera=False, lidar=False)
+        self.parser.readings = {"go to room1": {"intent": "go_to", "waypoints": ["room1"]}}
+        reply = self.say("go to room1")
+        self.assertTrue(reply.startswith("The robot can't capture anything right now."), reply)
+        self.assertIn(self.LIDAR_DOWN, reply)
+        self.assertIsNone(self.state)
+        self.assertEqual(self.missions(), [])
+
+    def test_schedules_are_held_to_the_same_rule(self) -> None:
+        self.report(lidar=False)
+        message = "every monday at 8am scan room1 with lidar"
+        self.parser.readings = {message: {"intent": "create_schedule", "waypoints": ["room1"], "time": "08:00",
+                                          "weekdays": [0]}}
+        reply = self.say(message)
+        self.assertIn("I can't take a point cloud right now", reply)
+        self.assertTrue(reply.endswith("Should I capture a 360° image at each stop instead?"), reply)
+        self.assertEqual(list(self.db.scalars(select(RobotMissionSchedule)).all()), [])
+
+    def test_capability_answer_and_chat_facts_follow_the_robot(self) -> None:
+        self.report(lidar=False)
+        reply = self.say("what can you do?")
+        self.assertTrue(reply.startswith("I can send the robot to a waypoint to capture a 360° image, for example"), reply)
+        self.chat.reply = "Hello!"
+        self.parser.readings = {"hi": {"intent": "unknown"}}
+        self.say("hi")
+        facts = self.chat.calls[-1][2]
+        self.assertIn("What the robot can capture right now: Right now I can only capture a 360° image.", facts)
 
 
 class AssistantEndpointTests(unittest.TestCase):
