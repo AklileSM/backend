@@ -87,6 +87,9 @@ SCHEDULE_TOOLS = [
           "Set or change fields of the schedule being drafted. Pass only the fields the user gave or changed. "
           "Lists replace the current value, so to add or remove a day pass the full new list.",
           {
+              "start_over": {"type": "boolean",
+                             "description": "true when the user wants a new, different schedule while one is "
+                                            "being drafted: the draft is cleared before the other fields are set."},
               "name": {"type": "string", "description": "The schedule's name."},
               "waypoints": {"type": "array", "items": {"type": "string"},
                             "description": "Waypoint names in visiting order, as listed in the facts."},
@@ -130,6 +133,7 @@ SCHEDULE_RULES = """Creating a schedule (a name, waypoints visited in order, a t
 - If the time doesn't say morning or evening and it could be either, ask.
 - When nothing is missing, call propose_schedule. Don't describe the schedule yourself.
 - After the proposal, if the user agrees, call create_schedule (enable false only if they want it kept off). If they change something, call set_fields instead.
+- If they ask for a new or different schedule while one is being drafted, call set_fields with start_over true (plus anything they gave for the new one).
 - If they no longer want the schedule, call discard_draft."""
 
 CAPTURE_WORDS = """Capture words: "photo", "picture", "360" and "image" mean image; "scan", "3D", "lidar" and "point cloud" mean pointcloud; "both" or "everything" means both."""
@@ -315,7 +319,7 @@ def set_fields(ctx: ra._Context, draft: dict[str, Any], args: dict[str, Any],
                said: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
     """(new draft, result for the model). Only values that pass their check change the draft.
     `said` is the person's message, for checks the model's tidied-up values would hide."""
-    draft = {**draft}
+    draft = _empty_draft() if args.get("start_over") is True else {**draft}
     problems: list[str] = []
     checks = {
         "name": lambda v: _check_name(ctx, v, said),
@@ -510,6 +514,7 @@ def reply_to(ctx: ra._Context, state: dict[str, Any] | None, text: str,
     reply = ""
     nudged = False
     acted = False  # a tool ran this turn, so an empty answer after it is fine
+    started_over = False  # a new, still empty schedule is being drafted
     tab_action: dict[str, Any] | None = None
     # Capture types asked for but unavailable: a read-back says why, so a dropped one isn't a
     # surprise. From the person's own words too, since the model may quietly leave one out.
@@ -552,6 +557,7 @@ def reply_to(ctx: ra._Context, state: dict[str, Any] | None, text: str,
                 notes += [problem for problem in result["problems"] if problem.startswith(CAPTURE_PROBLEM)]
                 if draft != state["draft"]:
                     proposed_before = False  # a changed schedule must be read back again
+                started_over = started_over or args.get("start_over") is True
                 state = {**state, "draft": draft}
             elif name == "propose_schedule":
                 missing = _missing(state["draft"])
@@ -596,7 +602,7 @@ def reply_to(ctx: ra._Context, state: dict[str, Any] | None, text: str,
                 result = done
             messages.append({"role": "tool", "tool_name": name or "", "content": json.dumps(result)})
 
-    drafting = any(state["draft"].get(key) for key in FIELDS) or proposed_before
+    drafting = any(state["draft"].get(key) for key in FIELDS) or proposed_before or started_over
     if everything and not drafting:
         # Plain conversation: nothing to keep between messages.
         if tab_action and reply in ("", NOTHING_DONE):

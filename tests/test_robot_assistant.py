@@ -1221,6 +1221,24 @@ class VoiceTranscriptTests(ConversationBase):
                                  [("connect", "cancelled")])
                 self.assertEqual(self.last_action, {"type": "robot_disconnecting"})
 
+    def test_run_it_on_days_while_building_a_schedule_is_not_run_now(self) -> None:
+        self.schedule_up_to("weekdays")
+        reply = self.say("Uh let's run it on Monday Wednesday Saturday and Sunday", voice=True)
+        self.assertNotIn("There are no schedules", reply)
+        self.assertEqual(self.state["intent"], "create_schedule")
+
+    def test_cancel_this_while_building_a_schedule_cancels_it(self) -> None:
+        self.schedule_up_to("weekdays")
+        self.assertEqual(self.say("Cancel this", voice=True), "OK, cancelled.")
+        self.assertIsNone(self.state)
+
+    def test_create_and_run_it_on_days_creates_a_schedule(self) -> None:
+        message = "Create a new schedule called demo and run it on Monday Tuesday and Saturday"
+        self.parser.readings = {message: {"intent": "create_schedule", "name": "demo", "weekdays": [0, 1, 5]}}
+        reply = self.say(message, voice=True)
+        self.assertNotIn("There are no schedules", reply)
+        self.assertEqual((self.state["intent"], self.state["weekdays"]), ("create_schedule", [0, 1, 5]))
+
     def test_cancel_connection_leaves_a_running_capture_alone(self) -> None:
         mission = RobotMission(
             robot_user_id=self.robot.id, robot_username=self.robot.username, project_id=self.project.id,

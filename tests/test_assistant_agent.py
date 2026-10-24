@@ -187,6 +187,11 @@ class ScheduleAgentTests(unittest.TestCase):
         self.say("create a schedule called kitchen", tool("set_fields", name="kitchen"), text("..."))
         self.assertEqual(self.state["draft"]["name"], "Kitchen")
 
+    def test_start_over_clears_the_draft(self) -> None:
+        self.say("create a schedule called demo", tool("set_fields", name="demo", weekdays=["Monday"]), text("Where?"))
+        self.say("create a new schedule", tool("set_fields", start_over=True), text("What should I call it?"))
+        self.assertEqual(self.state["draft"], assistant_agent._empty_draft())
+
     def test_existing_name_is_refused(self) -> None:
         self.propose_sketch()
         self.say("yes", tool("create_schedule", enable=True))

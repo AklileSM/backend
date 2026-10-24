@@ -1753,6 +1753,10 @@ def _schedule_request(ctx: _Context, state: dict[str, Any] | None, text: str):
     if _QUESTION_RE.search(text) and not _REQUEST_RE.search(text):
         return None
     mentions_name = any(_name_in(text, s.name) for s in _schedules(ctx))
+    # While a schedule or trip is being built, "run it on Monday" and "cancel this" are about that,
+    # not a saved schedule; only a saved schedule's name says otherwise.
+    if state and state.get("intent") in ("create_schedule", "go_to") and state.get("awaiting") and not mentions_name:
+        return None
     recent = " ".join(turn.get("text", "") for turn in ctx.history[-4:])
     about_schedule = (
         _SCHEDULE_WORD_RE.search(text)
@@ -1765,6 +1769,9 @@ def _schedule_request(ctx: _Context, state: dict[str, Any] | None, text: str):
     for action, pattern in _MANAGE_VERBS:
         if pattern.search(text):
             if action == "run" and not re.search(r"\b(now|right away|immediately|once)\b|\brun (it|that|the)\b", text, re.I):
+                continue
+            # "create a schedule ... and run it on Monday": days say when it runs, not "run it now".
+            if action == "run" and (parse_weekdays(text) or _SCHEDULE_REQUEST_RE.search(text)):
                 continue
             return action, _find_schedule(ctx, state, text)
     return None
