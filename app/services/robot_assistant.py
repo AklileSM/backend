@@ -27,6 +27,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.api.robot_missions import (
+    cancel_robot_command,
     cancel_robot_mission,
     create_robot_command,
     create_robot_mission,
@@ -37,7 +38,9 @@ from app.api.robot_missions import (
     update_robot_mission_schedule,
 )
 from app.config import get_settings
-from app.models import Project, Room, RobotCapturePoint, RobotMission, RobotMissionSchedule, RobotPresence, User
+from app.models import (
+    Project, Room, RobotCapturePoint, RobotCommand, RobotMission, RobotMissionSchedule, RobotPresence, User,
+)
 from app.services.robot_capabilities import SUPPORTED_OUTPUTS, capture_capabilities
 from app.schemas import (
     RobotCommandCreateRequest,
@@ -340,7 +343,10 @@ _CORRECTION_RE = re.compile(r"\b(actually|instead|change|wait|make it|rather|swi
 _ACTION_CLAIM_RE = re.compile(
     r"\b(I'?ve|I have|I'?m|I am|I just)\s+(now\s+|just\s+|already\s+)?(sent|sending|started|starting|"
     r"scheduled|scheduling|created|creating|cancell?ed|cancell?ing|connected|connecting|disconnected|"
-    r"disconnecting|stopped|stopping|moved|moving|enabled|enabling|dispatched|dispatching)\b",
+    r"disconnecting|stopped|stopping|moved|moving|enabled|enabling|dispatched|dispatching|deleted|deleting|"
+    r"removed|removing|paused|pausing|resumed|resuming|disabled|disabling)\b"
+    r"|\b(has|have|had) (now |just |already )?been (sent|started|scheduled|created|cancell?ed|"
+    r"connected|disconnected|stopped|moved|enabled|disabled|dispatched|deleted|removed|paused|resumed)\b",
     re.I,
 )
 
@@ -370,6 +376,8 @@ TAB_LABELS = {"route": "Route", "schedules": "Schedules", "progress": "Progress"
 _IMAGE_RE = re.compile(r"\b(images?|photos?|photographs?|photograph|pictures?|pics?|panoramas?|panos?|360)\b", re.I)
 _POINTCLOUD_RE = re.compile(r"\b(point ?clouds?|lidar|3d|pcd|depth)\b", re.I)
 _BOTH_RE = re.compile(r"\b(both|everything|all of (it|them)|all)\b", re.I)
+# How speech recognition writes "both" when the answer is a capture type.
+_BOTH_MISHEARD_RE = re.compile(r"\b(bose|boat|boats|board|booth)\b", re.I)
 
 _NUMBER_WORDS = {
     "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
@@ -404,7 +412,7 @@ def yes_or_no(text: str, parsed: _LazyParse | None = None) -> str | None:
 
 
 _DAY_TOKENS = [
-    (0, r"mon(day)?s?"),
+    (0, r"mon(day)?s?|month ?days?"),  # speech recognition sometimes writes Monday as "month day"
     (1, r"tue(s|sday)?s?"),
     (2, r"wed(nesday)?s?"),
     (3, r"thu(r|rs|rsday)?s?"),
@@ -646,6 +654,10 @@ class _Context:
     # What the robot can capture right now (services/robot_capabilities.py). Empty means unknown:
     # everything SiteScope supports is offered.
     captures: list[dict[str, Any]] = field(default_factory=list)
+    # How much of the conversation the language model runs (services/assistant_agent.py):
+    # "off", "schedules" or "all", and the model call it uses.
+    agent_mode: str = "off"
+    agent_model: Any = None
 
     @property
     def list_limit(self) -> int:
@@ -810,6 +822,7 @@ ROUTE_QUESTION = "Which waypoints should it visit, in order?"
 WHICH_WAYPOINT = "Which waypoint do you mean?"
 GO_WHERE = "Which waypoint should the robot go to?"
 OFFER_GO = "Want me to send the robot to one of them?"
+LIST_OFFER = " Want me to list the options?"
 
 
 def _choosing_route(state: dict[str, Any]) -> bool:
@@ -1093,7 +1106,8 @@ def _not_understood(ctx: _Context, state: dict[str, Any]) -> AssistantResult:
     if awaiting in WAYPOINT_SLOTS and awaiting != "waypoint_confirm":
         hint = "Tell me a waypoint name, or ask me to list them."
     elif awaiting == "capture":
-        hint = capture_options(ctx)
+        # The re-asked question names the choices; only say why one is missing.
+        hint = capture_options(ctx) if len(ctx.available_captures()) < len(SUPPORTED_OUTPUTS) else ""
     else:
         hint = SLOT_HELP.get(awaiting, "")
     return AssistantResult(reply=f"Sorry, I didn't get that. {hint} {reask}".replace("  ", " "), state=state)
@@ -1238,7 +1252,7 @@ def _advance_go_to(ctx: _Context, state: dict[str, Any], prefix: str = "") -> As
         return _ask(
             state,
             "capture",
-            f"What should I capture at {_join(names)}? Want me to list the options?",
+            f"What should I capture at {_join(names)}?{LIST_OFFER}",
             prefix=prefix,
             reask=f"What should I capture at {_join(names)}: {capture_choices(ctx)}?",
         )
@@ -1344,7 +1358,7 @@ def _advance_schedule(ctx: _Context, state: dict[str, Any], prefix: str = "") ->
         return _ask(
             state,
             "capture",
-            "What should it capture at each stop? Want me to list the options?",
+            f"What should it capture at each stop?{LIST_OFFER}",
             prefix=prefix,
             reask=f"What should it capture at each stop: {capture_choices(ctx)}?",
         )
@@ -1557,6 +1571,8 @@ def _said_name(text: str) -> str | None:
 
 def _start_intent(ctx: _Context, text: str, parsed: _LazyParse) -> AssistantResult:
     intent = parsed.get("intent", "unknown")
+    if intent == "create_schedule" and ctx.agent_model is not None:
+        return assistant_agent.start(ctx, text, ctx.agent_model)
     waypoints = [{"query": name, "id": None} for name in _model_place_names(parsed)]
     named = _names_in_text(text, ctx.points)
     if named and len(named) >= len(waypoints):
@@ -1662,13 +1678,18 @@ def _open_and_offer(tabs: list[str]) -> AssistantResult:
 
 # --- F. managing schedules ------------------------------------------------------------------------
 _MANAGE_VERBS = [
-    ("delete", re.compile(r"\b(delete|remove|erase|get rid of|trash|cancel)\b", re.I)),
+    ("delete", re.compile(r"\b(deleted?|remove|erase|get rid of|trash|cancel)\b", re.I)),
     ("pause", re.compile(r"\b(pause|disable|deactivate|suspend|stop)\b|\b(turn|switch)\b.{0,40}\boff\b", re.I)),
     ("resume", re.compile(r"\b(resume|enable|re-?enable|activate|unpause|restart)\b|\b(turn|switch)\b.{0,40}\bon\b", re.I)),
     ("run", re.compile(r"\b(run|start|trigger|kick off|launch|execute)\b", re.I)),
 ]
 _SCHEDULE_WORD_RE = re.compile(r"\bschedules?\b", re.I)
 _PRONOUN_RE = re.compile(r"\b(it|that|this|that one|this one|the last one|the one (i|we) just made)\b", re.I)
+# A bare verb right after a schedule was made or named ("deleted", "remove", "pause") is about that schedule.
+_BARE_MANAGE_RE = re.compile(r"^\s*(deleted?|remove|pause|resume|disable|enable)\s*(it|that|this)?\s*[.!]*\s*$", re.I)
+_DELETE_CONFIRM_RE = re.compile(
+    r"^\s*(yes,?\s*)?(deleted?|remove|erase)\s*(it|that|this|the schedule)?\s*(please)?\s*[.!]*\s*$", re.I
+)
 
 
 def _words(text: str) -> list[str]:
@@ -1737,6 +1758,7 @@ def _schedule_request(ctx: _Context, state: dict[str, Any] | None, text: str):
         _SCHEDULE_WORD_RE.search(text)
         or mentions_name
         or (_PRONOUN_RE.search(text) and (_SCHEDULE_WORD_RE.search(recent) or (state and state.get("schedule_id"))))
+        or (_BARE_MANAGE_RE.search(text) and state and state.get("schedule_id"))
     )
     if not about_schedule or _SCHEDULE_REQUEST_RE.search(text) and not re.search(r"\b(delete|remove|pause|resume|run|disable|enable)\b", text, re.I):
         return None
@@ -1798,8 +1820,32 @@ def _connect(ctx: _Context) -> AssistantResult:
     return _done("Connecting the robot. It takes a moment to come online.", {"type": "robot_connecting"})
 
 
+_CONNECTION_WORD_RE = re.compile(r"\b(connect|connection|connecting|online)\b", re.I)
+
+
+def _connecting(ctx: _Context) -> RobotCommand | None:
+    """The robot's connect command while it is still being carried out."""
+    return ctx.db.scalar(
+        select(RobotCommand)
+        .where(
+            or_(RobotCommand.robot_user_id == ctx.robot_id, RobotCommand.robot_username == ctx.robot_id),
+            RobotCommand.kind == "connect",
+            RobotCommand.status.in_(("queued", "dispatched", "running")),
+        )
+        .order_by(RobotCommand.created_at.desc())
+    )
+
+
+def _cancel_connecting(ctx: _Context, command: RobotCommand) -> AssistantResult:
+    cancel_robot_command(command.id, current_user=ctx.user, db=ctx.db)
+    return _done("OK, I stopped connecting the robot.", {"type": "robot_disconnecting"})
+
+
 def _disconnect(ctx: _Context) -> AssistantResult:
     if not ctx.robot_connected:
+        connecting = _connecting(ctx)
+        if connecting is not None:
+            return _cancel_connecting(ctx, connecting)
         return _done("The robot is already disconnected.")
     if _active_mission(ctx) is not None:
         return _done("The robot is busy with a capture. Say stop first, then I can disconnect it.")
@@ -1823,8 +1869,18 @@ def _connection_request(text: str, parsed: "_LazyParse | None" = None) -> str | 
     return None
 
 
-def _stop(ctx: _Context, state: dict[str, Any] | None = None) -> AssistantResult:
+def _stop(ctx: _Context, state: dict[str, Any] | None = None, text: str = "") -> AssistantResult:
     mission = _active_mission(ctx)
+    # "cancel" right after "connect" means the connect; so does "cancel the connection" at any time.
+    connecting = _connecting(ctx)
+    if connecting is not None and (
+        _CONNECTION_WORD_RE.search(text)
+        or (mission is None and (not state or state.get("awaiting") == "connect_wait"))
+    ):
+        return _cancel_connecting(ctx, connecting)
+    if mission is None and _CONNECTION_WORD_RE.search(text):
+        return _done("The robot is connected. Say disconnect to take it offline." if ctx.robot_connected
+                     else "The robot isn't connecting right now.")
     if mission is None:
         # Nothing to stop on the robot: "stop" ends whatever we were in the middle of.
         return _done("OK, cancelled." if state else "The robot isn't running a capture right now.")
@@ -1987,7 +2043,7 @@ def _fill_slot(ctx: _Context, state: dict[str, Any], text: str, parsed: _LazyPar
         return None
 
     if awaiting == "confirm_delete":
-        answer = yes_or_no(text, parsed)
+        answer = "yes" if _DELETE_CONFIRM_RE.search(text) else yes_or_no(text, parsed)
         if answer == "yes":
             delete_robot_mission_schedule(state["schedule_id"], current_user=ctx.user, db=ctx.db)
             return _done(f'Deleted "{state.get("schedule_name")}".',
@@ -2026,7 +2082,8 @@ def _fill_slot(ctx: _Context, state: dict[str, Any], text: str, parsed: _LazyPar
         return None
 
     if awaiting == "capture":
-        capture = detect_capture(_without_names(text, [p.name for p in ctx.points]), allow_both=True)
+        heard = _BOTH_MISHEARD_RE.sub("both", _without_names(text, [p.name for p in ctx.points]))
+        capture = detect_capture(heard, allow_both=True)
         if capture:
             return _advance(ctx, _absorb(ctx, {**state, "capture": capture}, text, skip="capture"))
         answer = yes_or_no(text)
@@ -2039,7 +2096,8 @@ def _fill_slot(ctx: _Context, state: dict[str, Any], text: str, parsed: _LazyPar
         if answer == "no":
             if offer:
                 return _done("OK, I'll leave it there.")
-            return AssistantResult(reply=f"OK. {state.get('reask')}", state=state)
+            question = (state.get("question") or "").removesuffix(LIST_OFFER) or state.get("reask")
+            return AssistantResult(reply=f"OK. {question}", state=state)
         return None
 
     if awaiting == "time_ampm":
@@ -2065,12 +2123,13 @@ def _fill_slot(ctx: _Context, state: dict[str, Any], text: str, parsed: _LazyPar
         if re.fullmatch(r"\s*(all|all of them|all days|every one|the whole week)\s*[.!]*\s*", text, re.I):
             return _advance(ctx, {**state, "weekdays": list(range(7))})
         if parse_weekdays(text):
-            return _advance(ctx, _absorb(ctx, _apply_weekdays(state, text, parse_weekdays(text)), text, skip="weekdays"))
+            next_state = _absorb(ctx, _apply_weekdays(state, text, parse_weekdays(text)), text, skip="weekdays")
+            return _advance(ctx, next_state, prefix=_heard_days(ctx, next_state))
         if parsed.unreachable:
             return None
         next_state = _apply_weekdays(state, text, parsed.get("weekdays"))
         if next_state.get("weekdays") or next_state.get("weekdays_pending"):
-            return _advance(ctx, next_state)
+            return _advance(ctx, next_state, prefix=_heard_days(ctx, next_state))
         return None
 
     if awaiting == "weekdays_confirm":
@@ -2094,6 +2153,13 @@ def _fill_slot(ctx: _Context, state: dict[str, Any], text: str, parsed: _LazyPar
     if awaiting in WAYPOINT_SLOTS:
         return _fill_waypoints(ctx, state, text, parsed)
     return None
+
+
+def _heard_days(ctx: _Context, state: dict[str, Any]) -> str:
+    """'Got it, Monday and Sunday. ' for a spoken answer; days still to be confirmed are asked instead."""
+    if not ctx.voice or not state.get("weekdays") or state.get("weekdays_pending"):
+        return ""
+    return f"Got it, {describe_days(state['weekdays'])}. "
 
 
 def _apply_correction(ctx: _Context, state: dict[str, Any], text: str) -> AssistantResult | None:
@@ -2131,6 +2197,8 @@ def _apply_correction(ctx: _Context, state: dict[str, Any], text: str) -> Assist
 
 def _answer(ctx: _Context, state: dict[str, Any], text: str, parsed: _LazyParse) -> AssistantResult:
     awaiting = state.get("awaiting")
+    if state.get("intent") == assistant_agent.INTENT:
+        return assistant_agent.reply_to(ctx, state, text, ctx.agent_model)
 
     if awaiting == "connect_wait":
         return AssistantResult(reply="Still connecting the robot. I'll start as soon as it's connected.", state=state)
@@ -2172,6 +2240,42 @@ def _answer(ctx: _Context, state: dict[str, Any], text: str, parsed: _LazyParse)
     return _reask(ctx, state, text)
 
 
+def _agent_turn(ctx: _Context, state: dict[str, Any] | None, text: str) -> AssistantResult | None:
+    """'all' mode. Stop, a plain cancel and answers to a coded question (connect? delete? enable?)
+    don't wait for the model; everything else is the model's. None: the model can't be reached."""
+    if _STOP_RE.search(text) and not _QUESTION_RE.search(text):
+        return _stop(ctx, state, text)
+    if _CANCEL_RE.search(text) and len(text.split()) <= 3:
+        if state and not _CONNECTION_WORD_RE.search(text) and state.get("awaiting") != "connect_wait":
+            return _done("OK, cancelled.")
+        return _stop(ctx, state, text)
+    if state and state.get("intent") != assistant_agent.INTENT and state.get("awaiting"):
+        no_model = _LazyParse(lambda *_: None, text, None)
+        if state["awaiting"] == "connect_wait":
+            return _answer(ctx, state, text, no_model)
+        kind, body = _message_kind(text, state["awaiting"])
+        # "ok that one" to "what should I capture?" names nothing; the model reads it in context.
+        names_capture = detect_capture(_BOTH_MISHEARD_RE.sub("both", body), allow_both=True)
+        if state["awaiting"] == "capture" and not names_capture and not state.get("capture_offer"):
+            kind = "elsewhere"
+        if kind == "elsewhere":
+            return assistant_agent.reply_to(ctx, None, text, ctx.agent_model)
+        if kind == "answer":
+            answered = _fill_slot(ctx, state, body, no_model)
+            if answered is not None:
+                return answered
+            # Not an answer to the coded question: the model takes it from here.
+            return assistant_agent.reply_to(ctx, None, text, ctx.agent_model)
+        # A question on the side ("what's a point cloud?"): the model answers, then the coded
+        # question is put again and still waits for its answer.
+        side = assistant_agent.reply_to(ctx, None, text, ctx.agent_model)
+        if side is None or side.state is not None or side.action is not None:
+            return side
+        reask = state.get("reask") or state.get("question") or ""
+        return AssistantResult(reply=f"{_without_questions(side.reply)} {reask}".strip(), state=state)
+    return assistant_agent.reply_to(ctx, state, text, ctx.agent_model)
+
+
 def handle_message(
     *,
     db: Session,
@@ -2188,11 +2292,15 @@ def handle_message(
     parser: Parser | None = None,
     chatter: Chatter | None = None,
     mission_id: str | None = None,
+    agent_model: Any = None,
+    agent_mode: str | None = None,
 ) -> AssistantResult:
+    """`agent_model` stands in for the agent's model in tests; passing one without `agent_mode`
+    means "schedules". `agent_mode` overrides the ASSISTANT_AGENT setting."""
     result = _handle_message(
         db=db, user=user, project_slug=project_slug, robot_id=robot_id, message=message, state=state,
         timezone=timezone, robot_connected=robot_connected, voice=voice, event=event, history=history,
-        parser=parser, chatter=chatter, mission_id=mission_id,
+        parser=parser, chatter=chatter, mission_id=mission_id, agent_model=agent_model, agent_mode=agent_mode,
     )
     result.draft = draft_of(result.state)
     return result
@@ -2200,6 +2308,8 @@ def handle_message(
 
 def draft_of(state: dict[str, Any] | None) -> dict[str, Any] | None:
     """The route or schedule being built, for the page to show filling in. None when nothing is."""
+    if state and state.get("intent") == assistant_agent.INTENT:
+        return assistant_agent.draft_of(state)
     if not state or state.get("soft") or state.get("intent") not in ("go_to", "create_schedule"):
         return None
     point_ids = [entry["id"] for entry in state.get("waypoints") or [] if entry.get("id")]
@@ -2253,10 +2363,13 @@ def _handle_message(
     chatter: Chatter | None,
     mission_id: str | None,
     connect_ok: bool = False,
+    agent_model: Any = None,
+    agent_mode: str | None = None,
 ) -> AssistantResult:
     call = dict(db=db, user=user, project_slug=project_slug, robot_id=robot_id, message=message, state=state,
                 timezone=timezone, robot_connected=robot_connected, voice=voice, event=event, history=history,
-                parser=parser, chatter=chatter, mission_id=mission_id, connect_ok=connect_ok)
+                parser=parser, chatter=chatter, mission_id=mission_id, connect_ok=connect_ok,
+                agent_model=agent_model, agent_mode=agent_mode)
     project = db.scalar(select(Project).where(Project.slug == project_slug))
     if project is None:
         return _done("Pick a project first.")
@@ -2287,6 +2400,8 @@ def _handle_message(
         connect_ok=connect_ok,
         captures=capture_capabilities(presence),
     )
+    ctx.agent_mode = agent_mode or ("schedules" if agent_model is not None else assistant_agent.mode())
+    ctx.agent_model = agent_model or (assistant_agent.chat_with_tools if ctx.agent_mode != "off" else None)
     state = dict(state) if state else None
 
     try:
@@ -2317,16 +2432,26 @@ def _handle_message(
             return AssistantResult(reply="I didn't hear anything.", state=state)
 
         awaiting = state.get("awaiting") if state else None
+        if ctx.agent_mode == "all":
+            answered = _agent_turn(ctx, state, text)
+            if answered is not None:
+                return answered
+            # The model can't be reached: the rules answer, without the model's conversation.
+            ctx.agent_model = None
+            if state and state.get("intent") == assistant_agent.INTENT:
+                state, awaiting = None, None
         # Managing a schedule comes first: "stop the demo schedule" pauses it, it doesn't stop the robot.
-        if awaiting not in ("name", "confirm_delete", "schedule_choice"):
+        if awaiting not in ("name", "confirm_delete", "schedule_choice", "agent"):
             managed = _schedule_request(ctx, state, text)
             if managed is not None:
                 return _manage_schedule(ctx, state, *managed)
         # Stop never waits on the model. A schedule name is the one place the word is just a word.
         if awaiting != "name" and _STOP_RE.search(text) and not _QUESTION_RE.search(text):
-            return _stop(ctx, state)
+            return _stop(ctx, state, text)
         if _CANCEL_RE.search(text):
-            return _done("OK, cancelled.") if state else _stop(ctx)
+            if state and not _CONNECTION_WORD_RE.search(text) and state.get("awaiting") != "connect_wait":
+                return _done("OK, cancelled.")
+            return _stop(ctx, state, text)
 
         tabs, rest = _tab_requests(ctx, text)
         if tabs and not rest and len(tabs) > 1 and (not state or state.get("soft")):
@@ -2382,6 +2507,10 @@ def _handle_message(
 
         if request is not None:
             parsed.intent_override = request
+            # The schedule agent needs nothing from the parser model, and asking it would swap
+            # the two models on the GPU.
+            if request == "create_schedule" and ctx.agent_model is not None:
+                return _start_intent(ctx, text, parsed)
             if parsed.unreachable and request == "create_schedule":
                 return _start_intent(ctx, text, parsed)
         if parsed.unreachable and request is None:
@@ -2390,7 +2519,7 @@ def _handle_message(
                 "isn't reachable. You can still say stop."
             )
         if parsed.get("intent") == "stop" and not _QUESTION_RE.search(text) and _STOP_WORDS_RE.search(text):
-            return _stop(ctx)
+            return _stop(ctx, text=text)
         if parsed.get("intent") == "open_tab" and parsed.get("tab") in TAB_LABELS:
             return AssistantResult(reply=f"Opened the {TAB_LABELS[parsed.get('tab')]} tab.", state=None,
                                    action={"type": "open_tab", "tab": parsed.get("tab")})
@@ -2407,3 +2536,7 @@ def _handle_message(
     except HTTPException as exc:
         db.rollback()
         return _done(f"I couldn't do that: {exc.detail}")
+
+
+# At the end: assistant_agent builds on everything above.
+from app.services import assistant_agent  # noqa: E402

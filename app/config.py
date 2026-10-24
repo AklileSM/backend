@@ -49,10 +49,14 @@ class Settings(BaseSettings):
     # Robot assistant: Ollama's native chat endpoint, which takes a JSON schema as "format".
     assistant_api_url: str = "http://192.168.50.103:11434/api/chat"
     assistant_model: str = "gemma4:e4b"
+    # Prototype: a larger language model runs the conversation through code-checked tools
+    # (services/assistant_agent.py): "off" (rule-based), "schedules" (creating a schedule) or "all".
+    assistant_agent: str = "off"
+    assistant_agent_model: str = "gemma4:26b"
     # Spoken replies: Kokoro's OpenAI-style speech endpoint on the same machine. Empty uses the
     # browser's own voice.
     assistant_tts_url: str = "http://192.168.50.103:8880/v1/audio/speech"
-    assistant_tts_voice: str = "af_jessica"
+    assistant_tts_voice: str = "af_heart"
 
     @field_validator("vision_api_key", mode="before")
     @classmethod

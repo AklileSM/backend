@@ -368,6 +368,9 @@ class AssistantConversationTests(ConversationBase):
         self.assertEqual(self.say("connect the robot", connected=False), "Connecting the robot. It takes a moment to come online.")
         self.assertEqual([c.kind for c in self.commands()], ["connect"])
         self.assertEqual(self.say("connect it", connected=True), "The robot is already connected.")
+        # While the connect is still under way, disconnect cancels it.
+        self.assertEqual(self.say("disconnect it", connected=False), "OK, I stopped connecting the robot.")
+        self.assertEqual([(c.kind, c.status) for c in self.commands()], [("connect", "cancelled")])
         self.assertEqual(self.say("disconnect it", connected=False), "The robot is already disconnected.")
         self.assertEqual(len(self.commands()), 1)
 
@@ -1149,6 +1152,85 @@ class AssistantEndpointTests(unittest.TestCase):
         self.assertIsNone(second.json()["state"])
         with Session(self.engine) as db:
             self.assertEqual(len(db.scalars(select(RobotMission)).all()), 1)
+
+
+class VoiceTranscriptTests(ConversationBase):
+    """A real spoken conversation: words the speech recognition got wrong, and requests that went astray."""
+
+    def schedule_up_to(self, slot: str) -> None:
+        self.parser.readings = {"create a schedule": {"intent": "create_schedule"}}
+        steps = {"weekdays": ["Demo 1", "room1", "5pm"], "capture": ["Demo 1", "room1", "5pm", "Tuesday"],
+                 "enable": ["Demo 1", "room1", "5pm", "Tuesday", "image"]}[slot]
+        for step in ["create a schedule", *steps]:
+            self.say(step, voice=True)
+        self.assertEqual(self.state["awaiting"], slot)
+
+    def test_misheard_both_answers_the_capture_question(self) -> None:
+        for heard in ["Bose", "capture board", "boat"]:
+            with self.subTest(heard=heard):
+                self.db.query(RobotMissionSchedule).delete()
+                self.schedule_up_to("capture")
+                self.assertTrue(self.say(heard, voice=True).startswith('Created "Demo 1"'))
+                schedule = self.db.scalars(select(RobotMissionSchedule)).one()
+                self.assertEqual(schedule.robot_meta_json["capture_outputs"], ["image", "pointcloud"])
+
+    def test_no_to_listing_the_options_doesnt_list_them(self) -> None:
+        self.schedule_up_to("capture")
+        self.assertEqual(self.say("no", voice=True), "OK. What should it capture at each stop?")
+        self.assertEqual(self.state["awaiting"], "capture")
+
+    def test_not_understood_capture_names_the_choices_once(self) -> None:
+        self.schedule_up_to("capture")
+        self.parser.readings["capture"] = {}  # an answer with nothing usable in it, as the real model reads it
+        reply = self.say("capture", voice=True)
+        self.assertEqual(reply.count("a 360° image, a point cloud, or both"), 1, reply)
+
+    def test_month_day_is_monday(self) -> None:
+        self.assertEqual(parse_weekdays("month day in Sunday"), [0, 6])
+
+    def test_spoken_days_are_said_back(self) -> None:
+        self.schedule_up_to("weekdays")
+        reply = self.say("month day in Sunday", voice=True)
+        self.assertTrue(reply.startswith("Got it, Monday and Sunday. What should it capture"), reply)
+
+    def test_typed_days_are_not_said_back(self) -> None:
+        self.schedule_up_to("weekdays")
+        self.assertTrue(self.say("Monday and Sunday").startswith("What should it capture"))
+
+    def test_deleted_right_after_creating_asks_to_delete(self) -> None:
+        self.schedule_up_to("enable")
+        self.assertEqual(self.say("deleted", voice=True), 'Delete the schedule "Demo 1"? It can\'t be undone.')
+        self.assertEqual(self.say("delete", voice=True), 'Deleted "Demo 1".')
+        self.assertEqual(self.db.scalars(select(RobotMissionSchedule)).all(), [])
+
+    def test_chat_reply_claiming_an_action_in_the_passive_is_replaced(self) -> None:
+        self.chat.reply = 'The schedule "Demo 1" has been removed.'
+        self.assertIn("I haven't done anything yet", self.say("could you maybe tidy up the site"))
+
+    def connect_then(self, message: str) -> str:
+        self.say("connect the robot", connected=False)
+        return self.say(message, connected=False)
+
+    def test_cancel_right_after_connect_cancels_the_connect(self) -> None:
+        self.parser.readings = {"I said cancel": {"intent": "stop"}}
+        for message in ["cancel", "cancel connection", "stop connecting", "I said cancel"]:
+            with self.subTest(message=message):
+                self.db.query(RobotCommand).delete()
+                self.assertEqual(self.connect_then(message), "OK, I stopped connecting the robot.")
+                self.assertEqual([(c.kind, c.status) for c in self.db.scalars(select(RobotCommand))],
+                                 [("connect", "cancelled")])
+                self.assertEqual(self.last_action, {"type": "robot_disconnecting"})
+
+    def test_cancel_connection_leaves_a_running_capture_alone(self) -> None:
+        mission = RobotMission(
+            robot_user_id=self.robot.id, robot_username=self.robot.username, project_id=self.project.id,
+            requested_by_user_id=self.operator.id, status="running", capture_mode="panorama",
+            capture_date=date(2026, 10, 21), waypoints_json=[{"name": "room1"}],
+        )
+        self.db.add(mission)
+        self.db.commit()
+        self.assertEqual(self.connect_then("cancel connection"), "OK, I stopped connecting the robot.")
+        self.assertEqual(self.db.get(RobotMission, mission.id).status, "running")
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ KOKORO_URL = "http://kokoro.test:8880/v1/audio/speech"
 
 
 def kokoro_settings(url: str = KOKORO_URL) -> Settings:
-    return Settings(assistant_tts_url=url, assistant_tts_voice="af_jessica")
+    return Settings(assistant_tts_url=url, assistant_tts_voice="af_heart")
 
 
 def kokoro_reply(status: int = 200, content: bytes = b"ID3audio") -> httpx.Response:
@@ -48,7 +48,7 @@ class AssistantSpeechTests(unittest.TestCase):
         self.assertEqual(post.call_args.args[0], KOKORO_URL)
         body = post.call_args.kwargs["json"]
         self.assertEqual(body["input"], "The robot is on its way to the kitchen.")
-        self.assertEqual(body["voice"], "af_jessica")
+        self.assertEqual(body["voice"], "af_heart")
         self.assertEqual(body["response_format"], "mp3")
 
     def test_unreachable_kokoro_is_503(self) -> None:
